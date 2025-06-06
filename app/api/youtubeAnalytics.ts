@@ -647,7 +647,7 @@ async function generateCommentAnalysis(videoTitle: string, commentText: string):
         content: commentText,
       },
     ],
-    temperature: 0.5,
+    temperature: 0.4,
     max_tokens: 3000,
     response_format: { type: 'json_object' },
   };

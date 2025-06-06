@@ -353,7 +353,7 @@ export const fetchMarketingInsights = async (
           { role: "system", content: context },
           { role: "user", content: JSON.stringify(groqInputData) },
         ],
-        temperature: 0.2,
+        temperature: 0.4,
         max_tokens: 3500,
         response_format: { type: 'json_object' },
       }),

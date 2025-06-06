@@ -140,7 +140,7 @@ interface AnalysisData {
   
   // Enhanced configuration for better filtering
   private static readonly FETCH_MULTIPLIER = 3; // Fetch 3x more ads than needed
-  private static readonly MIN_RELEVANCE_SCORE = 0.3; // Minimum keyword match score
+  private static readonly MIN_RELEVANCE_SCORE = 0.4; // Minimum keyword match score
   private static readonly MAX_INITIAL_FETCH = 200; // Maximum ads to fetch initially
 
   // Get model name from Supabase

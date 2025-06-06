@@ -283,7 +283,7 @@ export class MarketResearchService {
               content: `Analyze these search results for ${query} and provide product-focused insights in json format only:\n${JSON.stringify(results, null, 2)}` 
             },
           ],
-          temperature: 0.7,
+          temperature: 0.4,
           max_tokens: 4500,
           response_format: { type: 'json_object' },
         }),

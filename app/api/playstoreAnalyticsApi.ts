@@ -693,7 +693,7 @@ Here are the reviews to analyze${isSampled ? ` (sampled from ${reviewsForAnalysi
               content: userPrompt
             }
           ],
-          temperature: 0.2,
+          temperature: 0.4,
           max_tokens: 4500,
           response_format: { type: 'json_object' },
         })

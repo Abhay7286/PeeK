@@ -335,7 +335,7 @@ Ensure the analysis is data-driven, uses professional marketing terminology, and
           content: content,
         },
       ],
-      temperature: 0.5,
+      temperature: 0.4,
       max_tokens: 5000,
       response_format: { type: 'json_object' },
     };
