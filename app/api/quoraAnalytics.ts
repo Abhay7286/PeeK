@@ -213,7 +213,7 @@ export class QuoraAnalysisService {
 
   // Existing searchQuoraAnswers method remains the same
   private static async searchQuoraAnswers(query: string): Promise<QuoraAnswer[]> {
-    const url = new URL('https://quora-scraper.p.rapidapi.com/search_answers');
+    const url = new URL('https://quora-scraper1.p.rapidapi.com/search_answers');
     url.searchParams.append('query', query);
     url.searchParams.append('language', 'en');
     url.searchParams.append('time', 'all_times');
