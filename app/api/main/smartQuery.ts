@@ -42,7 +42,7 @@ Guidelines:
 - For YouTubeVideos: Format for video search, include terms like "study", "research" if appropriate
 - For QuoraAnalysis: Format as questions when possible
 - For XAnalytics: Include relevant hashtags with # symbol if appropriate
-- For FacebookAdsAnalysis: Focus on advertiser name or product type or product name, only one name, or name of the possible advertiser
+- For FacebookAdsAnalysis: Focus on advertiser name or product type or product name or Industry
 - For StrategyAnalysis: Create a comprehensive search query for strategic analysis
 
 Remember to return ONLY the JSON object with no additional text.
