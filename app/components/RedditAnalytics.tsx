@@ -344,7 +344,7 @@ const AnalyticsContentComponent = ({
                 <h4 className="text-sm font-medium">Activation Phrases</h4>
                 <ul className="list-disc pl-4 space-y-1 text-sm text-gray-400">
                   {trigger.activation_phrases.map((phrase: string, i: number) => (
-                    <li key={i}>"{phrase}"</li>
+                    <li key={i}>&ldquo;{phrase}&rdquo;</li>
                   ))}
                 </ul>
               </div>

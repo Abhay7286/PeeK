@@ -109,17 +109,6 @@ interface RedditPost {
   data: RedditPostData;
 }
 
-interface RedditSearchResponse {
-  kind: string;
-  data: {
-    children: RedditPost[];
-    after: string | null;
-    before: string | null;
-    modhash: string;
-    dist: number;
-  };
-}
-
 interface RedditCommentData {
   id: string;
   body: string;
