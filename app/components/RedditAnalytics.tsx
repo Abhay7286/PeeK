@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, Suspense, lazy, memo } from "react";
 import { fetchMarketingInsights } from "@/app/api/redditAnalysis";
-import { Activity, Brain, Target, TrendingUp } from "lucide-react";
+import { Activity, Brain, Target, TrendingUp, ExternalLink } from "lucide-react";
 import "@/styles/reddit-analysis.css";
 
 // Define interfaces for the missing types
@@ -12,6 +12,7 @@ interface PainPoint {
   frequency: number;
   verbatim_quotes: string[];
   suggested_solutions: string[];
+  sources?: string[];
 }
 
 interface NicheCommunity {
@@ -20,6 +21,25 @@ interface NicheCommunity {
   influence_score: number;
   demographic_indicators: string[];
   discussion_themes: string[];
+  sources?: string[];
+}
+
+interface EmotionalTrigger {
+  trigger: string;
+  intensity: number;
+  context: string;
+  activation_phrases: string[];
+  sources?: string[];
+}
+
+interface SentimentAnalysis {
+  overall_sentiment: number;
+  emotional_triggers: EmotionalTrigger[];
+  brand_perception: {
+    positive_attributes: string[];
+    negative_attributes: string[];
+    neutral_observations: string[];
+  };
 }
 
 interface EngagementMetrics {
@@ -32,6 +52,8 @@ interface RedditResult {
   title: string;
   subreddit: string;
   snippet: string;
+  link?: string;
+  source_url?: string;
   engagement_metrics?: EngagementMetrics;
 }
 
@@ -39,11 +61,72 @@ interface MarketingInsight {
   overview: string;
   recurring_pain_points: PainPoint[];
   niche_communities: NicheCommunity[];
+  sentiment_analysis: SentimentAnalysis;
+  sources: string[];
 }
 
 interface RedditAnalyticsProps {
   query: string;
 }
+
+// Helper function to format source links
+const formatSourceLink = (url: string): { display: string; isReddit: boolean } => {
+  try {
+    const urlObj = new URL(url);
+    const isReddit = url.includes('reddit.com');
+    
+    if (isReddit) {
+      const pathParts = urlObj.pathname.split('/').filter(part => part);
+      if (pathParts.length >= 4 && pathParts[0] === 'r') {
+        const subreddit = pathParts[1];
+        const title = pathParts[3].replace(/_/g, ' ');
+        return {
+          display: `r/${subreddit}: ${title.slice(0, 50)}${title.length > 50 ? '...' : ''}`,
+          isReddit: true
+        };
+      }
+      return { display: 'Reddit Discussion', isReddit: true };
+    } else {
+      return {
+        display: `${urlObj.hostname}${urlObj.pathname.length > 1 ? urlObj.pathname.slice(0, 30) + '...' : ''}`,
+        isReddit: false
+      };
+    }
+  } catch {
+    return { display: url.slice(0, 50) + '...', isReddit: url.includes('reddit.com') };
+  }
+};
+
+// Sources component
+const SourcesList = ({ sources }: { sources?: string[] }) => {
+  if (!sources || sources.length === 0) return null;
+  
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-700">
+      <h5 className="text-xs font-medium text-gray-400 mb-2">Sources</h5>
+      <div className="space-y-1">
+        {sources.slice(0, 3).map((source, index) => {
+          const formatted = formatSourceLink(source);
+          return (
+            <a
+              key={index}
+              href={source}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" />
+              <span className="truncate">{formatted.display}</span>
+            </a>
+          );
+        })}
+        {sources.length > 3 && (
+          <p className="text-xs text-gray-500">+{sources.length - 3} more sources</p>
+        )}
+      </div>
+    </div>
+  );
+};
 
 // Skeleton components
 const SkeletonCard = () => (
@@ -166,6 +249,7 @@ const AnalyticsContentComponent = ({
                 </ul>
               </div>
             </div>
+            <SourcesList sources={point.sources} />
           </div>
         ))}
       </div>
@@ -217,6 +301,55 @@ const AnalyticsContentComponent = ({
                 </ul>
               </div>
             </div>
+            <SourcesList sources={community.sources} />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+
+  const renderEmotionalTriggersSection = () => (
+    <section className="mt-12">
+      <h2 className="flex items-center gap-2 mb-6 text-2xl font-bold text-[#FF4500]">
+        <Activity className="h-6 w-6 text-[#FF4500]" />
+        <span>Emotional Triggers</span>
+      </h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {insights.sentiment_analysis.emotional_triggers.map((trigger: EmotionalTrigger, index: number) => (
+          <div key={index} className="bg-white/5 backdrop-blur-lg rounded-lg p-6 shadow-lg h-full flex flex-col hover:bg-white/10 transition-all duration-300">
+            <div className="mb-4">
+              <h3 className="text-xl font-semibold">{trigger.trigger}</h3>
+              <p className="text-sm text-gray-400">Intensity: {trigger.intensity}/100</p>
+            </div>
+            <div className="space-y-4 flex-grow">
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Emotional Impact</span>
+                  <span>{trigger.intensity}%</span>
+                </div>
+                <div className="relative w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                  <div 
+                    className="absolute top-0 left-0 h-full bg-[#FF4500] rounded-full"
+                    style={{ width: `${trigger.intensity}%` }}
+                  ></div>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium">Context</h4>
+                <p className="text-sm text-gray-400">{trigger.context}</p>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium">Activation Phrases</h4>
+                <ul className="list-disc pl-4 space-y-1 text-sm text-gray-400">
+                  {trigger.activation_phrases.map((phrase: string, i: number) => (
+                    <li key={i}>"{phrase}"</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <SourcesList sources={trigger.sources} />
           </div>
         ))}
       </div>
@@ -260,11 +393,75 @@ const AnalyticsContentComponent = ({
                 </div>
               )}
             </div>
+            
+            {/* Reddit post sources */}
+            <div className="mt-4 pt-4 border-t border-gray-700">
+              <div className="space-y-2">
+                {result.link && (
+                  <a
+                    href={result.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    <span>Reddit Discussion</span>
+                  </a>
+                )}
+                {result.source_url && result.source_url !== result.link && !result.source_url.includes('reddit.com') && (
+                  <a
+                    href={result.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 transition-colors"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    <span>Original Source</span>
+                  </a>
+                )}
+              </div>
+            </div>
           </div>
         ))}
       </div>
     </section>
   );
+
+  const renderOverallSourcesSection = () => {
+    if (!insights.sources || insights.sources.length === 0) return null;
+    
+    return (
+      <section className="mt-12">
+        <h2 className="flex items-center gap-2 mb-6 text-2xl font-bold text-[#FF4500]">
+          <ExternalLink className="h-6 w-6 text-[#FF4500]" />
+          <span>All Sources</span>
+        </h2>
+        <div className="bg-white/5 backdrop-blur-lg rounded-lg p-6 shadow-lg">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {insights.sources.map((source, index) => {
+              const formatted = formatSourceLink(source);
+              return (
+                <a
+                  key={index}
+                  href={source}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`flex items-center gap-2 p-3 rounded-lg border transition-all duration-200 hover:scale-105 ${
+                    formatted.isReddit 
+                      ? 'border-orange-500/30 bg-orange-500/10 hover:bg-orange-500/20' 
+                      : 'border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20'
+                  }`}
+                >
+                  <ExternalLink className="h-4 w-4 flex-shrink-0" />
+                  <span className="text-sm truncate">{formatted.display}</span>
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+    );
+  };
 
   return (
     <div className="space-y-8">
@@ -280,7 +477,9 @@ const AnalyticsContentComponent = ({
       </div>
       {renderPainPointsSection()}
       {renderNicheCommunitiesSection()}
+      {renderEmotionalTriggersSection()}
       {renderSourceDataSection()}
+      {renderOverallSourcesSection()}
     </div>
   );
 };
