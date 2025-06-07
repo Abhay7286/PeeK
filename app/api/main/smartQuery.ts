@@ -38,10 +38,10 @@ Guidelines:
 - For ImageResult: Add terms like "aesthetic","image", "visual", "picture" if appropriate
 - For GoogleAnalytics: Create a comprehensive search query add words like "study" or "research" or "benifits" if appropriate
 - For PlayStoreAnalytics: Only include app name or app categories, no other terms
-- For RedditAnalytics: Format for Reddit-specific search, dont use site:, dont mention subreddits add words like "effects" or "experience" or "problems" if appropriate
+- For RedditAnalytics: Format for Reddit-specific search, dont use site:, dont mention subreddits add words like "effects/issues" or "experience" or "problems" if appropriate
 - For YouTubeVideos: Format for video search, include terms like "study", "research" if appropriate
-- For QuoraAnalysis: Format as questions when possible
-- For XAnalytics: Include relevant hashtags with # symbol if appropriate
+- For QuoraAnalysis: Format as questions when possible but use words like "issues" or "problems" or "experiences"
+- For XAnalytics: Include relevant hashtags with # symbol if appropriate, trends
 - For FacebookAdsAnalysis: Focus on advertiser name or product type or product name or Industry
 - For StrategyAnalysis: Create a comprehensive search query for strategic analysis
 
