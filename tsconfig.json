@@ -30,7 +30,7 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     "debug.js",
-    "app/types/index.ts",
+    "types/index.ts",
     "html2pdf.d.ts"
   ],
   "exclude": ["node_modules"]

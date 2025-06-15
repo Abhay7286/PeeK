@@ -1,5 +1,12 @@
 import axios from 'axios';
 import { z } from 'zod';
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize Supabase client
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 // Zod schemas for YouTube data
 const YouTubeVideoSnippetSchema = z.object({
@@ -32,21 +39,17 @@ const VideoStatisticsSchema = z.object({
   commentCount: z.string().optional()
 });
 
-// Fix: Handle different types of video IDs in search results
-const YouTubeVideoIdSchema = z.object({
-  kind: z.string().optional(),
-  videoId: z.string()
-});
-
-// Use union type to handle different kinds of IDs that might be returned
-const YouTubeSearchItemIdSchema = z
-  .object({
+// Updated ID schema to match component expectations
+const YouTubeVideoIdSchema = z.union([
+  z.string(), // Direct video ID string
+  z.object({
+    kind: z.string().optional(),
     videoId: z.string()
   })
-  .or(YouTubeVideoIdSchema);
+]);
 
 const YouTubeSearchItemSchema = z.object({
-  id: YouTubeSearchItemIdSchema,
+  id: YouTubeVideoIdSchema,
   snippet: YouTubeVideoSnippetSchema,
   statistics: VideoStatisticsSchema.optional()
 });
@@ -66,15 +69,14 @@ const YouTubeStatisticsResponseSchema = z.object({
   items: z.array(YouTubeStatisticsItemSchema)
 });
 
-// Simplified comment schema - only store essential data
+// Comment schemas
 const CommentSnippetSchema = z.object({
   topLevelComment: z.object({
     id: z.string(),
     snippet: z.object({
       textDisplay: z.string(),
       textOriginal: z.string(),
-      likeCount: z.number(),
-      // Removed authorDisplayName, authorProfileImageUrl, publishedAt, updatedAt
+      likeCount: z.number()
     })
   }),
   totalReplyCount: z.number()
@@ -90,8 +92,7 @@ const CommentThreadResponseSchema = z.object({
   nextPageToken: z.string().optional()
 });
 
-// Enhanced Comment Analysis schema with sentiment analysis
-// Export directly to avoid the 'assigned but never used' error
+// Enhanced Comment Analysis schema
 export const CommentAnalysisSchema = z.object({
   success: z.boolean(),
   data: z.object({
@@ -137,14 +138,44 @@ export const CommentAnalysisSchema = z.object({
     sources: z.array(z.object({
       content: z.string(),
       sentiment: z.enum(['positive', 'negative', 'neutral', 'mixed']).optional()
-      // Removed author, likeCount, timestamp
     })),
     timestamp: z.string()
   }).optional(),
   error: z.string().optional()
 });
 
-// Type aliases
+// Raw API response types for YouTube
+interface YouTubeRawSearchItem {
+  id: string | { kind?: string; videoId: string };
+  snippet: {
+    title: string;
+    description: string;
+    thumbnails: {
+      default: { url: string; width?: number; height?: number };
+      medium: { url: string; width?: number; height?: number };
+      high: { url: string; width?: number; height?: number };
+    };
+    channelTitle: string;
+    publishedAt: string;
+  };
+}
+
+interface YouTubeRawCommentItem {
+  id: string;
+  snippet: {
+    topLevelComment: {
+      id: string;
+      snippet: {
+        textDisplay: string;
+        textOriginal: string;
+        likeCount?: number;
+      };
+    };
+    totalReplyCount?: number;
+  };
+}
+
+// Type exports
 export type YouTubeVideo = z.infer<typeof YouTubeSearchItemSchema>;
 export type VideoStatistics = z.infer<typeof VideoStatisticsSchema>;
 export type YouTubeSearchResponse = z.infer<typeof YouTubeSearchResponseSchema>;
@@ -156,10 +187,10 @@ export type CommentAnalysis = z.infer<typeof CommentAnalysisSchema>;
 // Constants
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 const YOUTUBE_API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;
-const GROQ_API_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY;
+const GROQ_API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_GROQ_API_KEY;
 const TIMEOUT = 30000;
-const MAX_COMMENTS_TO_ANALYZE = 50; // Limit number of comments sent to Groq
-const MAX_COMMENT_LENGTH = 300; // Limit comment length to reduce data size
+const MAX_COMMENTS_TO_ANALYZE = 75;
+const MAX_COMMENT_LENGTH = 300;
 
 class ApiError extends Error {
   code: string;
@@ -167,6 +198,16 @@ class ApiError extends Error {
     super(message);
     this.code = code;
   }
+}
+
+// Function to get model name from Supabase
+export async function getYouTubeVideosModel() {
+  const { data } = await supabase
+    .from('api_models')
+    .select('model_name')
+    .eq('api_name', 'YouTubeVideos')
+    .single();
+  return data?.model_name;
 }
 
 // Helper function for fetch with timeout
@@ -177,6 +218,7 @@ async function fetchWithTimeout(
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  
   try {
     const response = await fetch(url, {
       ...options,
@@ -186,25 +228,21 @@ async function fetchWithTimeout(
     return response;
   } catch (error) {
     clearTimeout(timeoutId);
-    if (error instanceof Error) {
-      if (error.name === 'AbortError') {
-        throw new Error('Request timed out');
-      }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Request timed out');
     }
     throw error;
   }
 }
 
-// Helper function to extract videoId safely
+// Helper function to extract videoId safely - matches component logic
 function getVideoId(item: YouTubeVideo): string | null {
   if (typeof item.id === 'string') {
-    return item.id as string;
+    return item.id;
   }
   
-  if (item.id && typeof item.id === 'object') {
-    if ('videoId' in item.id) {
-      return item.id.videoId;
-    }
+  if (item.id && typeof item.id === 'object' && 'videoId' in item.id) {
+    return item.id.videoId;
   }
   
   return null;
@@ -214,75 +252,117 @@ export async function searchYouTubeVideos(query: string, pageToken?: string): Pr
   if (!YOUTUBE_API_KEY) {
     throw new ApiError('YouTube API key is not configured', 'CONFIG_ERROR');
   }
+
   try {
+    console.log('Searching YouTube videos for:', query, pageToken ? `(page: ${pageToken})` : '');
+    
     // Fetch search results
     const searchResponse = await axios.get(`${YOUTUBE_API_BASE}/search`, {
       params: {
         part: 'snippet',
         type: 'video',
-        maxResults: '8',
+        maxResults: 8,
         q: query,
         pageToken,
-        key: YOUTUBE_API_KEY
-      }
+        key: YOUTUBE_API_KEY,
+        order: 'relevance'
+      },
+      timeout: TIMEOUT
     });
-    
-    // Define a type for YouTube API response items
-    type YouTubeResponseItem = {
-      id: string | { videoId?: string; kind?: string };
-      [key: string]: unknown;
-    };
-    
-    // Pre-process the items to ensure they all have a valid id.videoId structure
-    const processedData = {
-      ...searchResponse.data,
-      items: searchResponse.data.items.map((item: YouTubeResponseItem) => {
-        // If id is a string, convert it to { videoId: id }
+
+    console.log('Raw search response:', searchResponse.data);
+
+    // Process search results to ensure consistent ID format
+    const processedItems = searchResponse.data.items
+      .map((item: YouTubeRawSearchItem) => {
+        // Ensure we have a valid video ID
+        let videoId: string | null = null;
+        
         if (typeof item.id === 'string') {
-          return { ...item, id: { videoId: item.id } };
+          videoId = item.id;
+        } else if (item.id && typeof item.id === 'object' && item.id.videoId) {
+          videoId = item.id.videoId;
         }
-        // If id is already an object with videoId, keep it as is
-        if (item.id && typeof item.id === 'object' && 'videoId' in item.id) {
-          return item;
+
+        if (!videoId) {
+          console.warn('Skipping item without valid video ID:', item);
+          return null;
         }
-        // Otherwise, this item doesn't have a valid videoId, filter it out
-        return null;
-      }).filter(Boolean) // Remove null items
+
+        return {
+          ...item,
+          id: videoId // Normalize to string format for consistency
+        };
+      })
+      .filter(Boolean);
+
+    const searchData = {
+      ...searchResponse.data,
+      items: processedItems
     };
-    
-    const searchData = YouTubeSearchResponseSchema.parse(processedData);
-    
-    // Fetch statistics for videos
-    const videoIds = searchData.items
+
+    console.log('Processed search data:', searchData);
+
+    // Validate the processed data
+    const validatedSearchData = YouTubeSearchResponseSchema.parse(searchData);
+
+    // Get video IDs for statistics
+    const videoIds = validatedSearchData.items
       .map(item => getVideoId(item))
       .filter((id): id is string => id !== null);
-    
+
+    console.log('Video IDs for statistics:', videoIds);
+
+    if (videoIds.length === 0) {
+      console.warn('No valid video IDs found');
+      return validatedSearchData;
+    }
+
+    // Fetch statistics
     const statistics = await getVideoStatistics(videoIds);
+    console.log('Statistics fetched:', statistics);
 
     // Merge statistics with search results
-    const itemsWithStats = searchData.items.map(item => {
+    const itemsWithStats = validatedSearchData.items.map(item => {
       const videoId = getVideoId(item);
       if (!videoId) return item;
       
       return {
         ...item,
-        statistics: statistics[videoId]
+        statistics: statistics[videoId] || {
+          viewCount: '0',
+          likeCount: '0',
+          commentCount: '0'
+        }
       };
-    }).sort((a, b) => {
-      const aViews = parseInt(a.statistics?.viewCount || '0');
-      const bViews = parseInt(b.statistics?.viewCount || '0');
+    });
+
+    // Sort by view count (descending)
+    const sortedItems = itemsWithStats.sort((a, b) => {
+      const aViews = parseInt(a.statistics?.viewCount || '0', 10);
+      const bViews = parseInt(b.statistics?.viewCount || '0', 10);
       return bViews - aViews;
     });
 
-    return {
-      ...searchData,
-      items: itemsWithStats
+    const finalResult = {
+      ...validatedSearchData,
+      items: sortedItems
     };
+
+    console.log('Final search result:', finalResult);
+    return finalResult;
+
   } catch (error) {
     console.error('YouTube search error:', error);
+    
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.error?.message || error.message;
+      throw new ApiError(`YouTube API error: ${message}`, 'YOUTUBE_API_ERROR');
+    }
+    
     throw new ApiError(
-      'Failed to fetch YouTube videos',
-      error instanceof Error ? error.message : 'SEARCH_ERROR'
+      `Failed to fetch YouTube videos: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      'SEARCH_ERROR'
     );
   }
 }
@@ -291,27 +371,46 @@ export async function getVideoStatistics(videoIds: string[]): Promise<Record<str
   if (!YOUTUBE_API_KEY) {
     throw new ApiError('YouTube API key is not configured', 'CONFIG_ERROR');
   }
+
+  if (videoIds.length === 0) {
+    return {};
+  }
+
   try {
-    const response = await axios.get(
-      `${YOUTUBE_API_BASE}/videos`,
-      {
-        params: {
-          part: 'statistics',
-          id: videoIds.join(','),
-          key: YOUTUBE_API_KEY
-        }
-      }
-    );
+    console.log('Fetching statistics for video IDs:', videoIds);
+    
+    const response = await axios.get(`${YOUTUBE_API_BASE}/videos`, {
+      params: {
+        part: 'statistics',
+        id: videoIds.join(','),
+        key: YOUTUBE_API_KEY
+      },
+      timeout: TIMEOUT
+    });
+
+    console.log('Statistics response:', response.data);
+
     const validatedResponse = YouTubeStatisticsResponseSchema.parse(response.data);
-    return validatedResponse.items.reduce((acc, item) => {
+    
+    const statisticsMap = validatedResponse.items.reduce((acc, item) => {
       acc[item.id] = item.statistics;
       return acc;
     }, {} as Record<string, VideoStatistics>);
+
+    console.log('Statistics map:', statisticsMap);
+    return statisticsMap;
+
   } catch (error) {
     console.error('Statistics fetch error:', error);
+    
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.error?.message || error.message;
+      throw new ApiError(`YouTube API error: ${message}`, 'YOUTUBE_API_ERROR');
+    }
+    
     throw new ApiError(
-      'Failed to fetch video statistics',
-      error instanceof Error ? error.message : 'STATS_ERROR'
+      `Failed to fetch video statistics: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      'STATS_ERROR'
     );
   }
 }
@@ -320,71 +419,79 @@ export async function getVideoComments(videoId: string, maxResults: number = 100
   if (!YOUTUBE_API_KEY) {
     throw new ApiError('YouTube API key is not configured', 'CONFIG_ERROR');
   }
+
+  if (!videoId || typeof videoId !== 'string') {
+    throw new ApiError('Invalid video ID provided', 'INVALID_VIDEO_ID');
+  }
+
   try {
-    const response = await axios.get(
-      `${YOUTUBE_API_BASE}/commentThreads`,
-      {
-        params: {
-          part: 'snippet',
-          videoId: videoId,
-          maxResults: maxResults,
-          order: 'relevance',
-          textFormat: 'plainText',
-          key: YOUTUBE_API_KEY
-        }
-      }
-    );
+    console.log('Fetching comments for video ID:', videoId, 'maxResults:', maxResults);
     
-    // Define a type for the YouTube comment response
-    type YouTubeCommentItem = {
-      id: string;
-      snippet: {
-        topLevelComment: {
-          id: string;
-          snippet: {
-            textDisplay: string;
-            textOriginal: string;
-            likeCount: number;
-            [key: string]: unknown;
-          };
-        };
-        totalReplyCount: number;
-        [key: string]: unknown;
-      };
-    };
-    
-    // Process the response to keep only the text content
-    const simplifiedResponse = {
+    const response = await axios.get(`${YOUTUBE_API_BASE}/commentThreads`, {
+      params: {
+        part: 'snippet',
+        videoId: videoId,
+        maxResults: Math.min(maxResults, 100), // YouTube API limit
+        order: 'relevance',
+        textFormat: 'plainText',
+        key: YOUTUBE_API_KEY
+      },
+      timeout: TIMEOUT
+    });
+
+    console.log('Comments response:', response.data);
+
+    // Process the response to match our schema
+    const processedResponse = {
       ...response.data,
-      items: response.data.items.map((item: YouTubeCommentItem) => ({
+      items: response.data.items.map((item: YouTubeRawCommentItem) => ({
         id: item.id,
         snippet: {
           topLevelComment: {
             id: item.snippet.topLevelComment.id,
             snippet: {
               textDisplay: item.snippet.topLevelComment.snippet.textDisplay,
-              textOriginal: item.snippet.topLevelComment.snippet.textOriginal, 
-              likeCount: item.snippet.topLevelComment.snippet.likeCount
+              textOriginal: item.snippet.topLevelComment.snippet.textOriginal,
+              likeCount: item.snippet.topLevelComment.snippet.likeCount || 0
             }
           },
-          totalReplyCount: item.snippet.totalReplyCount
+          totalReplyCount: item.snippet.totalReplyCount || 0
         }
       }))
     };
+
+    const validatedResponse = CommentThreadResponseSchema.parse(processedResponse);
+    console.log('Validated comments response:', validatedResponse);
     
-    return CommentThreadResponseSchema.parse(simplifiedResponse);
+    return validatedResponse;
+
   } catch (error) {
     console.error('Comments fetch error:', error);
+    
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.error?.message || error.message;
+      
+      // Handle specific YouTube API errors
+      if (error.response?.status === 403) {
+        throw new ApiError('Comments are disabled for this video or access is restricted', 'COMMENTS_DISABLED');
+      }
+      if (error.response?.status === 404) {
+        throw new ApiError('Video not found or comments not available', 'VIDEO_NOT_FOUND');
+      }
+      
+      throw new ApiError(`YouTube API error: ${message}`, 'YOUTUBE_API_ERROR');
+    }
+    
     throw new ApiError(
-      'Failed to fetch video comments',
-      error instanceof Error ? error.message : 'COMMENTS_ERROR'
+      `Failed to fetch video comments: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      'COMMENTS_ERROR'
     );
   }
 }
 
 export async function analyzeVideoComments(videoId: string, videoTitle: string): Promise<CommentAnalysis> {
   try {
-    if (!videoId.trim()) {
+    if (!videoId?.trim()) {
       return { success: false, error: 'Video ID cannot be empty' };
     }
     
@@ -392,26 +499,31 @@ export async function analyzeVideoComments(videoId: string, videoTitle: string):
       return { success: false, error: 'API keys not configured' };
     }
 
-    const comments = await getVideoComments(videoId);
-    if (comments.items.length === 0) {
+    console.log('Analyzing comments for video:', videoId, videoTitle);
+
+    const comments = await getVideoComments(videoId, MAX_COMMENTS_TO_ANALYZE);
+    
+    if (!comments.items || comments.items.length === 0) {
       return { success: false, error: 'No comments found for this video' };
     }
 
-    // Limit the number of comments and their length for Groq analysis
-    const limitedComments = comments.items
-      .slice(0, MAX_COMMENTS_TO_ANALYZE)
+    // Process comments for analysis
+    const commentTexts = comments.items
       .map(item => sanitizeText(item.snippet.topLevelComment.snippet.textOriginal, MAX_COMMENT_LENGTH))
-      .filter(Boolean)
-      .join('\n\n');
+      .filter(text => text && text.length > 10) // Filter out very short comments
+      .slice(0, MAX_COMMENTS_TO_ANALYZE);
 
-    if (!limitedComments) {
+    if (commentTexts.length === 0) {
       return { success: false, error: 'No valid comments to analyze' };
     }
 
+    const limitedComments = commentTexts.join('\n\n');
+    console.log(`Analyzing ${commentTexts.length} comments (${limitedComments.length} characters)`);
+
     const analysis = await generateCommentAnalysis(videoTitle, limitedComments);
 
-    // Add sentiment analysis to sources but only store the content and sentiment
-    const sourcesWithSentiment = comments.items.map(item => ({
+    // Add sentiment analysis to sources
+    const sourcesWithSentiment = comments.items.slice(0, 20).map(item => ({
       content: sanitizeText(item.snippet.topLevelComment.snippet.textOriginal, MAX_COMMENT_LENGTH),
       sentiment: analyzeSentiment(item.snippet.topLevelComment.snippet.textOriginal)
     }));
@@ -432,10 +544,10 @@ export async function analyzeVideoComments(videoId: string, videoTitle: string):
   }
 }
 
-// Simple sentiment analysis function (placeholder - in production, use a proper NLP library or API)
+// Simple sentiment analysis function
 function analyzeSentiment(text: string): 'positive' | 'negative' | 'neutral' | 'mixed' {
-  const positiveWords = ['great', 'good', 'awesome', 'excellent', 'love', 'amazing', 'best', 'perfect', 'helpful', 'wonderful'];
-  const negativeWords = ['bad', 'worst', 'terrible', 'awful', 'hate', 'disappointing', 'horrible', 'useless', 'poor', 'waste'];
+  const positiveWords = ['great', 'good', 'awesome', 'excellent', 'love', 'amazing', 'best', 'perfect', 'helpful', 'wonderful', 'fantastic', 'brilliant'];
+  const negativeWords = ['bad', 'worst', 'terrible', 'awful', 'hate', 'disappointing', 'horrible', 'useless', 'poor', 'waste', 'boring', 'stupid'];
   
   const lowerText = text.toLowerCase();
   let positiveCount = 0;
@@ -454,7 +566,7 @@ function analyzeSentiment(text: string): 'positive' | 'negative' | 'neutral' | '
   });
   
   if (positiveCount > 0 && negativeCount > 0) {
-    return positiveCount > negativeCount ? 'mixed' : 'mixed';
+    return 'mixed';
   } else if (positiveCount > 0) {
     return 'positive';
   } else if (negativeCount > 0) {
@@ -464,9 +576,15 @@ function analyzeSentiment(text: string): 'positive' | 'negative' | 'neutral' | '
 }
 
 async function generateCommentAnalysis(videoTitle: string, commentText: string): Promise<string> {
+  // Get model name from Supabase
+  const modelName = await getYouTubeVideosModel();
+  
+  if (!modelName) {
+    throw new Error('Model name not found in database');
+  }
+
   const url = 'https://api.groq.com/openai/v1/chat/completions';
   
-  // Simplified prompt - focusing only on essential analysis
   const analysisPrompt = {
     role: 'system',
     content: `Analyze the provided YouTube comments for the video titled "${videoTitle}" and generate a focused analysis in the following JSON format:
@@ -498,7 +616,7 @@ async function generateCommentAnalysis(videoTitle: string, commentText: string):
       "sentiment": "positive/negative/neutral/mixed",
       "possibleSolutions": ["Array of 2-3 potential content improvements"]
     }
-  ] (exactly 3 items),
+  ] (exactly 6 items),
   "userExperiences": [
     {
       "scenario": "Detailed description of the viewer experience",
@@ -506,7 +624,7 @@ async function generateCommentAnalysis(videoTitle: string, commentText: string):
       "frequencyPattern": "Pattern of occurrence and context",
       "sentiment": "positive/negative/neutral/mixed"
     }
-  ] (exactly 2 items),
+  ] (exactly 3 items),
   "emotionalTriggers": [
     {
       "trigger": "Name of the emotional trigger",
@@ -515,13 +633,13 @@ async function generateCommentAnalysis(videoTitle: string, commentText: string):
       "responsePattern": "Typical viewer response to this trigger",
       "dominantEmotion": "Primary emotion associated with this trigger"
     }
-  ] (exactly 2 items),
+  ] (exactly 3 items),
   "marketImplications": "Strategic insights for content creation based on sentiment patterns"
 }`
   };
 
   const payload = {
-    model: 'deepseek-r1-distill-qwen-32b',
+    model: modelName, // Using dynamic model name from Supabase
     messages: [
       analysisPrompt,
       {
@@ -529,17 +647,9 @@ async function generateCommentAnalysis(videoTitle: string, commentText: string):
         content: commentText,
       },
     ],
-    temperature: 0.7,
-    max_tokens: 2500, // Reduced token limit
+    temperature: 0.4,
+    max_tokens: 3000,
     response_format: { type: 'json_object' },
-  };
-
-  type GroqResponse = {
-    choices?: Array<{
-      message?: {
-        content?: string;
-      };
-    }>;
   };
 
   try {
@@ -565,7 +675,7 @@ async function generateCommentAnalysis(videoTitle: string, commentText: string):
       );
     }
 
-    const data = await response.json() as GroqResponse;
+    const data = await response.json();
     const analysis = data?.choices?.[0]?.message?.content;
 
     if (!analysis) {
@@ -573,7 +683,6 @@ async function generateCommentAnalysis(videoTitle: string, commentText: string):
     }
 
     return analysis;
-
   } catch (error) {
     console.error('Groq API error:', error);
     throw new Error(
@@ -587,8 +696,11 @@ async function generateCommentAnalysis(videoTitle: string, commentText: string):
 // Utility function
 function sanitizeText(text: string, maxLength: number = 300): string {
   if (!text) return '';
+  
   const sanitized = text.replace(/\s+/g, ' ').trim();
   if (sanitized.length <= maxLength) return sanitized;
+  
   const truncated = sanitized.substring(0, maxLength);
-  return truncated.substring(0, truncated.lastIndexOf(' ')) + '...';
+  const lastSpaceIndex = truncated.lastIndexOf(' ');
+  return (lastSpaceIndex > 0 ? truncated.substring(0, lastSpaceIndex) : truncated) + '...';
 }

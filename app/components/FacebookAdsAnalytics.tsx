@@ -1,22 +1,40 @@
 "use client";
 
 import React, { useState, useEffect, memo } from 'react';
-import Image from 'next/image'; // Import Next.js Image component
+import Image from 'next/image';
 import { MetaAdAnalysisService } from '@/app/api/facebookAnalytics';
 import { 
   MessageSquare, Eye, Target, 
-  Users, Award, ArrowRight, Sparkles 
+  Users, Award, ArrowRight, Sparkles,
+  ImageIcon, ChevronLeft, ChevronRight, Play, Video 
 } from 'lucide-react';
 import { Progress } from "@/app/components/ui/progress"; 
 
-// Types
+// Updated Types to match the API structure
+interface MediaUrl {
+  original?: string;
+  resized?: string;
+  watermarked?: string;
+  preview?: string;
+  type: 'image' | 'video_preview';
+}
+
+interface VideoUrl {
+  hd?: string;
+  sd?: string;
+  watermarked_hd?: string;
+  watermarked_sd?: string;
+  preview_image?: string;
+}
+
 interface MetaAdContent {
   adId: string;
   pageId: string;
   pageName: string;
   content: string;
   title?: string;
-  imageUrl?: string;
+  images: MediaUrl[];
+  videos: VideoUrl[];
   linkUrl?: string;
   active: boolean;
   creationTime?: string;
@@ -76,7 +94,270 @@ interface MetaAdAnalysisProps {
   className?: string;
 }
 
-// Helper Components
+// Skeleton Components
+const SkeletonCard = memo(() => (
+  <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 shadow-lg animate-pulse">
+    <div className="h-6 bg-white/20 rounded mb-4 w-3/4"></div>
+    <div className="space-y-2 mb-4">
+      <div className="h-4 bg-white/15 rounded w-full"></div>
+      <div className="h-4 bg-white/15 rounded w-5/6"></div>
+      <div className="h-4 bg-white/15 rounded w-4/5"></div>
+    </div>
+    <div className="h-2 bg-white/15 rounded mb-2"></div>
+    <div className="h-3 bg-white/15 rounded w-1/2"></div>
+  </div>
+));
+SkeletonCard.displayName = 'SkeletonCard';
+
+const SkeletonParagraph = memo(() => (
+  <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 animate-pulse">
+    <div className="space-y-3">
+      <div className="h-4 bg-white/15 rounded w-full"></div>
+      <div className="h-4 bg-white/15 rounded w-11/12"></div>
+      <div className="h-4 bg-white/15 rounded w-10/12"></div>
+      <div className="h-4 bg-white/15 rounded w-full"></div>
+      <div className="h-4 bg-white/15 rounded w-9/12"></div>
+    </div>
+  </div>
+));
+SkeletonParagraph.displayName = 'SkeletonParagraph';
+
+const SkeletonSourceAd = memo(() => (
+  <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 animate-pulse">
+    <div className="h-64 bg-white/15 rounded-md mb-4"></div>
+    <div className="h-5 bg-white/20 rounded mb-2 w-3/4"></div>
+    <div className="space-y-2 mb-4">
+      <div className="h-4 bg-white/15 rounded w-full"></div>
+      <div className="h-4 bg-white/15 rounded w-5/6"></div>
+    </div>
+    <div className="flex justify-between items-center">
+      <div className="h-4 bg-white/15 rounded w-1/3"></div>
+      <div className="h-4 bg-white/15 rounded w-1/4"></div>
+    </div>
+  </div>
+));
+SkeletonSourceAd.displayName = 'SkeletonSourceAd';
+
+// Media Item Component for handling both images and videos
+const MediaItem = memo(({ 
+  media, 
+  isVideo = false,
+  adTitle,
+  pageName,
+  onError 
+}: { 
+  media: MediaUrl | VideoUrl;
+  isVideo?: boolean;
+  adTitle?: string;
+  pageName: string;
+  onError?: () => void;
+}) => {
+  const [hasError, setHasError] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Get the best available URL for display
+  const getDisplayUrl = () => {
+    if (isVideo) {
+      const videoMedia = media as VideoUrl;
+      return (
+        videoMedia.preview_image ||
+        videoMedia.hd ||
+        videoMedia.sd ||
+        videoMedia.watermarked_hd ||
+        videoMedia.watermarked_sd
+      );
+    } else {
+      const imageMedia = media as MediaUrl;
+      return (
+        imageMedia.original ||
+        imageMedia.resized ||
+        imageMedia.watermarked ||
+        imageMedia.preview
+      );
+    }
+  };
+
+  const displayUrl = getDisplayUrl();
+
+  if (!displayUrl || hasError) {
+    return (
+      <div className="relative w-full h-64 bg-gray-800 flex items-center justify-center rounded-md">
+        <div className="flex flex-col items-center gap-2 opacity-40">
+          {isVideo ? <Video className="w-12 h-12" /> : <ImageIcon className="w-12 h-12" />}
+          <span className="text-sm">Media unavailable</span>
+        </div>
+      </div>
+    );
+  }
+
+  const handleError = () => {
+    setHasError(true);
+    setIsLoading(false);
+    onError?.();
+  };
+
+  const handleLoad = () => {
+    setIsLoading(false);
+  };
+
+  return (
+    <div className="relative w-full h-64 rounded-md overflow-hidden group">
+      {isLoading && (
+        <div className="absolute inset-0 bg-gray-800 flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white opacity-50" />
+        </div>
+      )}
+      
+      {isVideo && 'hd' in media && (media.hd || media.sd) ? (
+        // For actual video files, show video element
+        <video
+          className="w-full h-full object-cover"
+          poster={(media as VideoUrl).preview_image}
+          controls
+          preload="metadata"
+          onError={handleError}
+          onLoadedData={handleLoad}
+        >
+          {(media as VideoUrl).hd && (
+            <source src={(media as VideoUrl).hd} type="video/mp4" />
+          )}
+          {(media as VideoUrl).sd && (
+            <source src={(media as VideoUrl).sd} type="video/mp4" />
+          )}
+          Your browser does not support the video tag.
+        </video>
+      ) : (
+        <>
+          <Image 
+            src={displayUrl} 
+            alt={adTitle || `${isVideo ? 'Video' : 'Image'} from ${pageName}`} 
+            fill
+            style={{ objectFit: 'cover' }}
+            className="rounded-md"
+            onError={handleError}
+            onLoad={handleLoad}
+            unoptimized
+          />
+          
+          {isVideo && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+              <div className="bg-black/60 rounded-full p-3">
+                <Play className="w-8 h-8 text-white fill-white" />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      
+      <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs">
+        {isVideo ? 'Video' : 'Image'}
+      </div>
+    </div>
+  );
+});
+MediaItem.displayName = 'MediaItem';
+
+// Enhanced Media Carousel Component
+const MediaCarousel = memo(({ 
+  images,
+  videos,
+  adTitle,
+  pageName 
+}: { 
+  images: MediaUrl[];
+  videos: VideoUrl[];
+  adTitle?: string;
+  pageName: string;
+}) => {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [failedIndices, setFailedIndices] = useState<Set<number>>(new Set());
+
+  const allMedia: Array<{item: MediaUrl | VideoUrl, isVideo: boolean}> = [
+    ...images.map(img => ({ item: img, isVideo: false })),
+    ...videos.map(vid => ({ item: vid, isVideo: true }))
+  ];
+
+  const availableMedia = allMedia.filter((_, index) => !failedIndices.has(index));
+
+  if (availableMedia.length === 0) {
+    return (
+      <div className="relative w-full h-64 bg-gray-800 flex items-center justify-center rounded-md">
+        <div className="flex flex-col items-center gap-2 opacity-40">
+          <ImageIcon className="w-12 h-12" />
+          <span className="text-sm">No media available</span>
+        </div>
+      </div>
+    );
+  }
+
+  const nextMedia = () => {
+    setCurrentIndex((prev) => (prev + 1) % availableMedia.length);
+  };
+
+  const prevMedia = () => {
+    setCurrentIndex((prev) => (prev - 1 + availableMedia.length) % availableMedia.length);
+  };
+
+  const handleMediaError = (originalIndex: number) => {
+    setFailedIndices(prev => new Set([...prev, originalIndex]));
+    if (originalIndex === currentIndex && availableMedia.length > 1) {
+      nextMedia();
+    }
+  };
+
+  const safeCurrentIndex = Math.min(currentIndex, availableMedia.length - 1);
+  const currentMedia = availableMedia[safeCurrentIndex];
+
+  return (
+    <div className="relative">
+      <MediaItem
+        media={currentMedia.item}
+        isVideo={currentMedia.isVideo}
+        adTitle={adTitle}
+        pageName={pageName}
+        onError={() => handleMediaError(allMedia.findIndex(m => m === currentMedia))}
+      />
+      
+      {availableMedia.length > 1 && (
+        <>
+          <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1">
+            {availableMedia.map((_, idx) => (
+              <button 
+                key={idx} 
+                className={`w-2 h-2 rounded-full ${idx === safeCurrentIndex ? 'bg-white' : 'bg-white/50'}`}
+                onClick={() => setCurrentIndex(idx)}
+                aria-label={`Go to media ${idx + 1}`}
+              />
+            ))}
+          </div>
+          
+          <button
+            onClick={prevMedia}
+            className="absolute left-2 top-1/2 transform -translate-y-1/2 bg-black/60 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+            aria-label="Previous media"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+          
+          <button
+            onClick={nextMedia}
+            className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-black/60 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+            aria-label="Next media"
+          >
+            <ChevronRight className="w-6 h-6" />
+          </button>
+        </>
+      )}
+      
+      <div className="absolute top-2 right-2 bg-black/60 px-2 py-1 rounded text-xs">
+        {safeCurrentIndex + 1}/{availableMedia.length}
+      </div>
+    </div>
+  );
+});
+MediaCarousel.displayName = 'MediaCarousel';
+
+// Enhanced Analysis Card Component
 const AnalysisCard = memo(({ 
   title, 
   content, 
@@ -94,35 +375,40 @@ const AnalysisCard = memo(({
   secondMetricLabel?: string;
   items?: string[];
 }) => (
-  <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 shadow-lg">
-    <h3 className="text-xl font-semibold mb-4">{title}</h3>
-    <p className="mb-4">{content}</p>
+  <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 shadow-lg hover:bg-white/15 transition-colors duration-200 h-full flex flex-col">
+    <h3 className="text-xl font-semibold mb-4 text-white">{title}</h3>
+    <p className="mb-4 text-gray-200 flex-grow leading-relaxed">{content}</p>
     
-    {metric !== undefined && (
-      <div className="space-y-2 mb-3">
-        <Progress value={metric * 10} className="h-2" />
-        <span className="text-sm">
-          {metricLabel}: {metric}/10
-        </span>
-      </div>
-    )}
-    
-    {secondMetric !== undefined && (
-      <div className="space-y-2 mb-3">
-        <Progress value={secondMetric * 10} className="h-2" />
-        <span className="text-sm">
-          {secondMetricLabel}: {secondMetric}/10
-        </span>
-      </div>
-    )}
-    
-    {items && items.length > 0 && (
-      <ul className="mt-4 space-y-2">
-        {items.map((item, index) => (
-          <li key={index} className="text-sm">{item}</li>
-        ))}
-      </ul>
-    )}
+    <div className="mt-auto space-y-3">
+      {metric !== undefined && (
+        <div className="space-y-2">
+          <Progress value={metric * 10} className="h-2" />
+          <span className="text-sm text-gray-300">
+            {metricLabel}: {metric}/10
+          </span>
+        </div>
+      )}
+      
+      {secondMetric !== undefined && (
+        <div className="space-y-2">
+          <Progress value={secondMetric * 10} className="h-2" />
+          <span className="text-sm text-gray-300">
+            {secondMetricLabel}: {secondMetric}/10
+          </span>
+        </div>
+      )}
+      
+      {items && items.length > 0 && (
+        <ul className="space-y-1 text-sm text-gray-300">
+          {items.map((item, index) => (
+            <li key={index} className="flex items-start gap-2">
+              <span className="text-blue-400 mt-1">•</span>
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   </div>
 ));
 AnalysisCard.displayName = 'AnalysisCard';
@@ -134,8 +420,8 @@ const SectionHeader = memo(({
   icon: React.ReactNode; 
   title: string;
 }) => (
-  <div className="flex items-center gap-2 text-2xl font-bold mb-4">
-    {icon}
+  <div className="flex items-center gap-3 text-2xl font-bold mb-6 text-white">
+    <div className="text-blue-400">{icon}</div>
     {title}
   </div>
 ));
@@ -197,16 +483,72 @@ const MetaAdAnalysisDashboard: React.FC<MetaAdAnalysisProps> = ({
 
   if (state.loading) {
     return (
-      <div className="flex justify-center items-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white" />
+      <div className={`max-w-7xl mx-auto px-4 py-8 ${className}`}>
+        <header className="mb-8">
+          <div className="h-8 bg-white/20 rounded mb-4 w-1/2 animate-pulse"></div>
+          <div className="h-6 bg-white/15 rounded w-1/3 animate-pulse"></div>
+        </header>
+
+        <div className="space-y-8">
+          {/* Overview Skeleton */}
+          <section>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-6 h-6 bg-white/20 rounded animate-pulse"></div>
+              <div className="h-6 bg-white/20 rounded w-32 animate-pulse"></div>
+            </div>
+            <SkeletonParagraph />
+          </section>
+
+          {/* Cards Skeletons */}
+          {['Messaging Strategies', 'Visual Tactics', 'Audience Targeting', 'Call to Action Effectiveness'].map((section) => (
+            <section key={section}>
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-6 h-6 bg-white/20 rounded animate-pulse"></div>
+                <div className="h-6 bg-white/20 rounded w-48 animate-pulse"></div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {[...Array(3)].map((_, i) => (
+                  <SkeletonCard key={i} />
+                ))}
+              </div>
+            </section>
+          ))}
+
+          {/* Competitive Advantage Skeleton */}
+          <section>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-6 h-6 bg-white/20 rounded animate-pulse"></div>
+              <div className="h-6 bg-white/20 rounded w-56 animate-pulse"></div>
+            </div>
+            <SkeletonParagraph />
+          </section>
+
+          {/* Source Ads Skeleton */}
+          <section>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-6 h-6 bg-white/20 rounded animate-pulse"></div>
+              <div className="h-6 bg-white/20 rounded w-32 animate-pulse"></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[...Array(6)].map((_, i) => (
+                <SkeletonSourceAd key={i} />
+              ))}
+            </div>
+          </section>
+        </div>
       </div>
     );
   }
 
   if (state.error) {
     return (
-      <div className="text-center text-red-500 p-4">
-        {state.error}
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="text-center">
+          <div className="bg-red-500/20 backdrop-blur-lg rounded-lg p-6 border border-red-500/30">
+            <h2 className="text-xl font-semibold text-red-400 mb-2">Analysis Failed</h2>
+            <p className="text-red-300">{state.error}</p>
+          </div>
+        </div>
       </div>
     );
   }
@@ -219,20 +561,20 @@ const MetaAdAnalysisDashboard: React.FC<MetaAdAnalysisProps> = ({
 
   return (
     <div className={`max-w-7xl mx-auto px-4 py-8 ${className}`}>
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Meta Ad Competitor Analysis</h1>
-        <p className="text-lg opacity-70">Analysis for: {keyword}</p>
+      <header className="mb-8 text-left">
+        <h1 className="text-4xl font-bold mb-4 text-white">Meta Ad Competitor Analysis</h1>
+        <p className="text-xl text-gray-300">Analysis for: <span className="text-blue-400 font-semibold">{keyword}</span></p>
       </header>
 
-      <div className="space-y-8">
+      <div className="space-y-12">
         {/* Overview Section */}
         <section>
           <SectionHeader 
-            icon={<Target className="w-6 h-6" />} 
+            icon={<Target className="w-7 h-7" />} 
             title="Overview" 
           />
-          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6">
-            <div className="prose max-w-none">
+          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-8 shadow-lg">
+            <div className="prose prose-lg max-w-none text-gray-200 leading-relaxed">
               {data.analysis.overview}
             </div>
           </div>
@@ -241,10 +583,10 @@ const MetaAdAnalysisDashboard: React.FC<MetaAdAnalysisProps> = ({
         {/* Messaging Strategies */}
         <section>
           <SectionHeader 
-            icon={<MessageSquare className="w-6 h-6" />} 
+            icon={<MessageSquare className="w-7 h-7" />} 
             title="Messaging Strategies" 
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.analysis.messagingStrategies.map((strategy, index) => (
               <AnalysisCard
                 key={`strategy-${index}`}
@@ -263,10 +605,10 @@ const MetaAdAnalysisDashboard: React.FC<MetaAdAnalysisProps> = ({
         {/* Visual Tactics */}
         <section>
           <SectionHeader 
-            icon={<Eye className="w-6 h-6" />} 
+            icon={<Eye className="w-7 h-7" />} 
             title="Visual Tactics" 
           />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.analysis.visualTactics.map((tactic, index) => (
               <AnalysisCard
                 key={`tactic-${index}`}
@@ -283,10 +625,10 @@ const MetaAdAnalysisDashboard: React.FC<MetaAdAnalysisProps> = ({
         {/* Audience Targeting */}
         <section>
           <SectionHeader 
-            icon={<Users className="w-6 h-6" />} 
+            icon={<Users className="w-7 h-7" />} 
             title="Audience Targeting" 
           />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.analysis.audienceTargeting.map((audience, index) => (
               <AnalysisCard
                 key={`audience-${index}`}
@@ -303,11 +645,11 @@ const MetaAdAnalysisDashboard: React.FC<MetaAdAnalysisProps> = ({
         {/* Competitive Advantage */}
         <section>
           <SectionHeader 
-            icon={<Award className="w-6 h-6" />} 
+            icon={<Award className="w-7 h-7" />} 
             title="Competitive Advantage" 
           />
-          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6">
-            <div className="prose max-w-none">
+          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-8 shadow-lg">
+            <div className="prose prose-lg max-w-none text-gray-200 leading-relaxed">
               {data.analysis.competitiveAdvantage}
             </div>
           </div>
@@ -316,10 +658,10 @@ const MetaAdAnalysisDashboard: React.FC<MetaAdAnalysisProps> = ({
         {/* Call to Action Effectiveness */}
         <section>
           <SectionHeader 
-            icon={<ArrowRight className="w-6 h-6" />} 
+            icon={<ArrowRight className="w-7 h-7" />} 
             title="Call to Action Effectiveness" 
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.analysis.callToActionEffectiveness.map((cta, index) => (
               <AnalysisCard
                 key={`cta-${index}`}
@@ -336,11 +678,11 @@ const MetaAdAnalysisDashboard: React.FC<MetaAdAnalysisProps> = ({
         {/* Recommended Counter Strategies */}
         <section>
           <SectionHeader 
-            icon={<Sparkles className="w-6 h-6" />} 
+            icon={<Sparkles className="w-7 h-7" />} 
             title="Recommended Counter Strategies" 
           />
-          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6">
-            <div className="prose max-w-none">
+          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-8 shadow-lg">
+            <div className="prose prose-lg max-w-none text-gray-200 leading-relaxed">
               {data.analysis.recommendedCounterStrategies}
             </div>
           </div>
@@ -349,59 +691,80 @@ const MetaAdAnalysisDashboard: React.FC<MetaAdAnalysisProps> = ({
         {/* Source Ads */}
         <section>
           <SectionHeader 
-            icon={<Target className="w-6 h-6" />} 
+            icon={<Target className="w-7 h-7" />} 
             title="Source Ads" 
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.sources.map((ad, index) => (
-              <div key={`ad-${index}`} className="bg-white/10 backdrop-blur-lg rounded-lg p-6">
-                {ad.imageUrl && (
-                  <div className="mb-4 relative w-full h-64">
-                    <Image 
-                      src={ad.imageUrl} 
-                      alt={`Ad from ${ad.pageName}`} 
-                      fill
-                      style={{ objectFit: 'cover' }}
-                      className="rounded-md"
+              <div key={`ad-${index}`} className="bg-white/10 backdrop-blur-lg rounded-lg p-6 shadow-lg hover:bg-white/15 transition-colors duration-200 flex flex-col">
+                {((ad.images && ad.images.length > 0) || (ad.videos && ad.videos.length > 0)) && (
+                  <div className="mb-4">
+                    <MediaCarousel 
+                      images={ad.images || []} 
+                      videos={ad.videos || []}
+                      adTitle={ad.title} 
+                      pageName={ad.pageName} 
                     />
                   </div>
                 )}
-                {ad.title && (
-                  <h4 className="font-medium mb-2">{ad.title}</h4>
-                )}
-                <div className="mb-4">{ad.content}</div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-blue-400">
-                    {ad.pageName}
-                  </span>
-                  <div className="flex items-center gap-4">
-                    <span>{ad.active ? "Active" : "Inactive"}</span>
-                    {ad.linkUrl && (
-                      <a 
-                        href={ad.linkUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-400 hover:text-blue-300"
-                      >
-                        View Landing Page →
-                      </a>
-                    )}
-                  </div>
+                
+                <div className="flex-grow">
+                  {ad.title && (
+                    <h4 className="font-semibold mb-3 text-white text-lg">{ad.title}</h4>
+                  )}
+                  <p className="mb-4 text-gray-200 leading-relaxed">{ad.content}</p>
+                  
+                  {((ad.images?.length || 0) + (ad.videos?.length || 0)) > 0 && (
+                    <div className="text-xs text-gray-400 mb-3 flex items-center gap-4">
+                      <span className="flex items-center gap-1">
+                        <ImageIcon className="w-3 h-3" />
+                        {ad.images?.length || 0} image(s)
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Video className="w-3 h-3" />
+                        {ad.videos?.length || 0} video(s)
+                      </span>
+                    </div>
+                  )}
                 </div>
-                {ad.creationTime && (
-                  <div className="text-xs opacity-70 mt-2">
-                    Created: {new Date(ad.creationTime).toLocaleDateString()}
+                
+                <div className="mt-auto pt-4 border-t border-white/10">
+                  <div className="flex justify-between items-center text-sm mb-2">
+                    <span className="text-blue-400 font-medium">
+                      {ad.pageName}
+                    </span>
+                    <div className="flex items-center gap-4">
+                      <span className={`px-2 py-1 rounded text-xs ${ad.active ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                        {ad.active ? "Active" : "Inactive"}
+                      </span>
+                      {ad.linkUrl && (
+                        <a 
+                          href={ad.linkUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 transition-colors flex items-center gap-1"
+                        >
+                          <span>View</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
                   </div>
-                )}
+                  {ad.creationTime && (
+                    <div className="text-xs text-gray-400">
+                      Created: {new Date(ad.creationTime).toLocaleDateString()}
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         </section>
       </div>
 
-      <div className="text-sm opacity-70 text-right mt-8">
+      <footer className="text-sm text-gray-400 text-right mt-12 pt-8 border-t border-white/10">
         Last updated: {new Date(data.timestamp).toLocaleString()}
-      </div>
+      </footer>
     </div>
   );
 };

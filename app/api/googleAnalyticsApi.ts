@@ -1,4 +1,11 @@
 import { useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize Supabase client
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+);
 
 // Types
 interface GoogleResult {
@@ -16,7 +23,7 @@ interface TrendCard {
   contentIdeas: string[];
   bestPractices: string[];
 }
- 
+
 interface InsightCard {
   title: string;
   type: 'consumer' | 'industry';
@@ -35,7 +42,6 @@ interface SeasonalCard {
   contentSuggestions: string[];
 }
 
-// Modified Trigger interface focused on product triggers
 interface TriggerCard {
   productFeature: string;
   userNeed: string;
@@ -57,7 +63,6 @@ interface MarketResearchAnalysis {
   consumerInsights: InsightCard[];
   industryInsights: InsightCard[];
   seasonalTopics: SeasonalCard[];
-  // Modified top triggers field focused on product
   topTriggers: TriggerCard[];
   recommendations: {
     contentStrategy: string[];
@@ -67,13 +72,11 @@ interface MarketResearchAnalysis {
   };
 }
 
-interface GoogleSearchData {
+interface MarketResearchResponse {
   success: boolean;
-  data?: {
-    results: GoogleResult[];
-    analysis: MarketResearchAnalysis;
-    timestamp: string;
-  };
+  googleResults?: GoogleResult[];
+  analysis?: MarketResearchAnalysis;
+  timestamp?: string;
   error?: string;
 }
 
@@ -105,11 +108,11 @@ const CONFIG = {
   API_KEYS: {
     GOOGLE: process.env.NEXT_PUBLIC_GOOGLE_API_KEY,
     SEARCH_ENGINE_ID: process.env.NEXT_PUBLIC_GOOGLE_SEARCH_ENGINE_ID,
-    GROQ: process.env.NEXT_PUBLIC_GROQ_API_KEY
+    GROQ: process.env.NEXT_PUBLIC_GOOGLE_GROQ_API_KEY
   }
 } as const;
 
-const MARKET_RESEARCH_PROMPT = `You are a highly skilled marketing analyst with expertise in digital advertising, content strategy, and emerging trends in the Indian market. Conduct a deep-dive analysis of the provided search results and generate a comprehensive advertising research report in JSON format. This report should emphasize actionable insights, data-driven recommendations, and strategic opportunities tailored for Indian audiences across urban and tier-2/3 cities.
+const MARKET_RESEARCH_PROMPT = `Give me a JSON Output only. You are a highly skilled marketing analyst with expertise in digital advertising, content strategy, and emerging trends in the Indian market. Conduct a deep-dive analysis of the provided search results and generate a comprehensive advertising research report in JSON format. This report should emphasize actionable insights, data-driven recommendations, and strategic opportunities tailored for Indian audiences across urban and tier-2/3 cities.
 
   "executiveSummary": "HTML-formatted overview highlighting key opportunities for advertising and content creation",
   
@@ -169,7 +172,6 @@ const MARKET_RESEARCH_PROMPT = `You are a highly skilled marketing analyst with 
     {
       "productFeature": "Specific product feature or attribute",
       "userNeed": "Specific user need this feature addresses",
-      
       "relevance": "Relevance score to product (0-100)",
       "recommendedProductContent": ["Product-specific content recommendations"]
     }
@@ -183,28 +185,21 @@ const MARKET_RESEARCH_PROMPT = `You are a highly skilled marketing analyst with 
   }
 }
   
-Guidelines:
-Include 10 high-value product triggers related to the search topic.
-Each trigger should include user needs, purchase intent metrics, and product-specific content ideas.
-Sort triggers by relevance to the product and potential conversion rate.
-Include a mix of functional and emotional product attributes.
-Tiktok is banned in India.
-Give me Creative ideas only, not Generic Ideas.
-And use Complex Marketing Language.
-Ensure all insights are specific to the Indian market.
-Provide six well-researched trend analyses with clear examples.
-Generate three consumer insights focusing on behavioral shifts.
-Create three industry insights highlighting market disruptions.
-Include three seasonal content ideas with optimal timing windows.
-Recommend hashtags, keywords, and engagement benchmarks.
-Balance organic and paid marketing opportunities.
-Address both metro and non-metro digital trends
-Consider viral potential and interactive formats (polls, quizzes, live sessions).
-Suggest clear CTAs to drive conversions.`;
+Give me 9 topTriggers, 3 trends, 3 consumerInsights, 3 industryInsights, 3  India Specific seasonalTopics, 3 recommendations. `;
 
-// Main service class
+// Function to get model name from Supabase
+export async function getGoogleAnalyticsModel() {
+  const { data } = await supabase
+    .from('api_models')
+    .select('model_name')
+    .eq('api_name', 'GoogleAnalytics')
+    .single();
+  
+  return data?.model_name;
+}
+
 export class MarketResearchService {
-  private static activeRequests = new Map<string, Promise<GoogleSearchData>>();
+  private static activeRequests = new Map<string, Promise<MarketResearchResponse>>();
 
   private static async fetchWithTimeout(
     url: string,
@@ -239,8 +234,8 @@ export class MarketResearchService {
     const searchUrl = new URL('https://www.googleapis.com/customsearch/v1');
     searchUrl.searchParams.append('key', CONFIG.API_KEYS.GOOGLE || '');
     searchUrl.searchParams.append('cx', CONFIG.API_KEYS.SEARCH_ENGINE_ID || '');
-    searchUrl.searchParams.append('q', `${query} product features benefits user needs`);
-    searchUrl.searchParams.append('num', '10');
+    searchUrl.searchParams.append('q', `${query}`);
+    searchUrl.searchParams.append('num', '9');
 
     const response = await this.fetchWithTimeout(searchUrl.toString(), { method: 'GET' });
 
@@ -264,6 +259,13 @@ export class MarketResearchService {
     query: string,
     results: GoogleResult[]
   ): Promise<MarketResearchAnalysis> {
+    // Fetch model name from Supabase
+    const modelName = await getGoogleAnalyticsModel();
+    
+    if (!modelName) {
+      throw new Error('Unable to fetch model name from database');
+    }
+
     const response = await this.fetchWithTimeout(
       'https://api.groq.com/openai/v1/chat/completions',
       {
@@ -273,16 +275,16 @@ export class MarketResearchService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'deepseek-r1-distill-qwen-32b',
+          model: modelName,
           messages: [
             { role: 'system', content: MARKET_RESEARCH_PROMPT },
             { 
               role: 'user', 
-              content: `Analyze these search results for ${query} and provide product-focused insights in json format:\n${JSON.stringify(results, null, 2)}` 
+              content: `Analyze these search results for ${query} and provide product-focused insights in json format only:\n${JSON.stringify(results, null, 2)}` 
             },
           ],
-          temperature: 0.7,
-          max_tokens: 4000,
+          temperature: 0.4,
+          max_tokens: 4500,
           response_format: { type: 'json_object' },
         }),
       }
@@ -307,7 +309,7 @@ export class MarketResearchService {
     return JSON.parse(analysis) as MarketResearchAnalysis;
   }
 
-  public static async researchMarket(query: string): Promise<GoogleSearchData> {
+  public static async researchMarket(query: string): Promise<MarketResearchResponse> {
     if (!query.trim()) {
       return { success: false, error: 'Query cannot be empty' };
     }
@@ -322,22 +324,18 @@ export class MarketResearchService {
 
       const newRequest = (async () => {
         try {
-          const results = await this.fetchGoogleResults(query);
-          if (results.length === 0) {
+          const googleResults = await this.fetchGoogleResults(query);
+          if (googleResults.length === 0) {
             return { success: false, error: 'No search results found' };
           }
 
-          const analysis = await this.generateAnalysis(query, results);
-          const response: GoogleSearchData = {
+          const analysis = await this.generateAnalysis(query, googleResults);
+          return {
             success: true,
-            data: {
-              results,
-              analysis,
-              timestamp: new Date().toISOString(),
-            },
+            googleResults,
+            analysis,
+            timestamp: new Date().toISOString(),
           };
-
-          return response;
         } finally {
           this.activeRequests.delete(query);
         }
@@ -353,9 +351,8 @@ export class MarketResearchService {
   }
 }
 
-// React hook
 export const useMarketResearch = () => {
-  const [researchData, setResearchData] = useState<GoogleSearchData | null>(null);
+  const [researchData, setResearchData] = useState<MarketResearchResponse | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -382,10 +379,13 @@ export const useMarketResearch = () => {
   };
 
   return {
-    researchData,
+    googleResults: researchData?.googleResults,
+    analysis: researchData?.analysis,
+    timestamp: researchData?.timestamp,
     research,
     clearResearch,
     isLoading,
-    error
+    error: researchData?.error || error,
+    isSuccess: researchData?.success || false
   };
 };

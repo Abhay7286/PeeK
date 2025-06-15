@@ -1,3 +1,5 @@
+import { supabase } from '@/lib/supabase'; // Adjust this import path to your supabase client
+
 interface MetaAdItem {
   adid: string;
   adArchiveID: string;
@@ -9,6 +11,7 @@ interface MetaAdItem {
       title?: string;
       link_url?: string;
       video_preview_image_url?: string;
+      image_url?: string;
     }>;
     body?: {
       markup?: {
@@ -18,6 +21,19 @@ interface MetaAdItem {
     title?: string;
     link_description?: string;
     creation_time?: number;
+    // Enhanced image and video structure based on API response
+    images?: Array<{
+      original_image_url?: string;
+      resized_image_url?: string;
+      watermarked_resized_image_url?: string;
+    }>;
+    videos?: Array<{
+      video_hd_url?: string;
+      video_sd_url?: string;
+      watermarked_video_sd_url?: string;
+      watermarked_video_hd_url?: string;
+      video_preview_image_url?: string;
+    }>;
   };
   isActive: boolean;
   startDate?: number;
@@ -40,22 +56,48 @@ interface AnalysisResult {
     analysis: AnalysisData;
     sources: MetaAdContent[];
     timestamp: string;
+    filteringStats: {
+      totalFetched: number;
+      afterDeduplication: number;
+      afterKeywordFilter: number;
+      finalAnalyzed: number;
+    };
   };
   error?: string;
-  rawResponse?: unknown; // Changed from any to unknown
+  rawResponse?: unknown;
 }
 
-// Content extracted from ads for analysis
+// Enhanced content structure with proper media URLs
 interface MetaAdContent {
   adId: string;
   pageId: string;
   pageName: string;
   content: string;
   title?: string;
-  imageUrl?: string;
+  images: MediaUrl[]; // Enhanced image structure
+  videos: VideoUrl[]; // Enhanced video structure
   linkUrl?: string;
   active: boolean;
   creationTime?: string;
+  relevanceScore?: number; // New field for keyword matching score
+}
+
+// Structure for image URLs with different quality options
+interface MediaUrl {
+  original?: string;
+  resized?: string;
+  watermarked?: string;
+  preview?: string; // For video preview images
+  type: 'image' | 'video_preview';
+}
+
+// Structure for video URLs with different quality options
+interface VideoUrl {
+  hd?: string;
+  sd?: string;
+  watermarked_hd?: string;
+  watermarked_sd?: string;
+  preview_image?: string;
 }
 
 // Structure for analysis data
@@ -90,10 +132,27 @@ interface AnalysisData {
   recommendedCounterStrategies: string;
 }
 
-export class MetaAdAnalysisService {
-  private static readonly TIMEOUT = 60000; // Increased timeout to 60 seconds
-  private static readonly RAPIDAPI_KEY = process.env.NEXT_PUBLIC_FRAPIDAPI_KEY;
-  private static readonly GROQ_API_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY;
+
+  export class MetaAdAnalysisService {
+  private static readonly TIMEOUT = 60000;
+  private static readonly RAPIDAPI_KEY = process.env.NEXT_PUBLIC_FACEBOOK_RAPID_API_KEY;
+  private static readonly GROQ_API_KEY = process.env.NEXT_PUBLIC_FACEBOOK_GROQ_API_KEY;
+  
+  // Enhanced configuration for better filtering
+  private static readonly FETCH_MULTIPLIER = 3; // Fetch 3x more ads than needed
+  private static readonly MIN_RELEVANCE_SCORE = 0.4; // Minimum keyword match score
+  private static readonly MAX_INITIAL_FETCH = 200; // Maximum ads to fetch initially
+
+  // Get model name from Supabase
+  private static async getFacebookAdsAnalysisModel() {
+    const { data } = await supabase
+      .from('api_models')
+      .select('model_name')
+      .eq('api_name', 'FacebookAdsAnalysis')
+      .single()
+    
+    return data?.model_name
+  }
 
   // Fetch with timeout to prevent hanging requests
   private static async fetchWithTimeout(
@@ -103,7 +162,6 @@ export class MetaAdAnalysisService {
   ): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
-
     try {
       const response = await fetch(url, {
         ...options,
@@ -122,7 +180,7 @@ export class MetaAdAnalysisService {
     }
   }
 
-  // Main analysis method - entry point
+  // Main analysis method - enhanced with keyword filtering
   public static async analyzeCompetitorAds(
     query: string,
     countryCode: string = 'IN',
@@ -138,34 +196,57 @@ export class MetaAdAnalysisService {
       if (!this.RAPIDAPI_KEY) {
         return { success: false, error: 'RapidAPI key not configured' };
       }
-
       if (!this.GROQ_API_KEY) {
         return { success: false, error: 'Groq API key not configured' };
       }
 
-      // Search for ads based on query
-      const ads = await this.searchMetaAds(query, countryCode, platform, adType, limit);
+      // Calculate how many ads to fetch initially (more than needed for filtering)
+      const initialFetchLimit = Math.min(
+        limit * this.FETCH_MULTIPLIER,
+        this.MAX_INITIAL_FETCH
+      );
+
+      console.log(`Fetching ${initialFetchLimit} ads for keyword filtering (target: ${limit})`);
+
+      // Search for ads based on query (fetch more than needed)
+      const allAds = await this.searchMetaAds(query, countryCode, platform, adType, initialFetchLimit);
       
-      if (!ads || ads.length === 0) {
+      if (!allAds || allAds.length === 0) {
         return { success: false, error: 'No relevant ads found for the query' };
       }
 
-      // Extract content from ads for analysis
-      const adContent = this.extractContentFromAds(ads);
+      // Extract content from all fetched ads
+      const allAdContent = this.extractContentFromAds(allAds);
       
-      if (adContent.length === 0) {
+      if (allAdContent.length === 0) {
         return { success: false, error: 'Failed to extract content from ads' };
       }
 
-      // Generate the analysis using AI
+      // Filter ads based on keyword relevance
+      const relevantAds = this.filterAdsByKeywordRelevance(query, allAdContent);
+      
+      if (relevantAds.length === 0) {
+        return { 
+          success: false, 
+          error: `No ads contain the query keywords "${query}". Found ${allAdContent.length} ads but none were relevant.` 
+        };
+      }
+
+      // Take only the requested number of most relevant ads
+      const finalAds = relevantAds
+        .sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0))
+        .slice(0, limit);
+
+      console.log(`Filtered from ${allAds.length} → ${allAdContent.length} → ${relevantAds.length} → ${finalAds.length} ads`);
+
+      // Generate the analysis using AI with filtered, relevant ads
       try {
-        const analysis = await this.generateAdAnalysis(query, adContent);
+        const analysis = await this.generateAdAnalysis(query, finalAds);
         let parsedAnalysis: AnalysisData;
         
         try {
           parsedAnalysis = JSON.parse(analysis) as AnalysisData;
         } catch {
-          // Removed the unused variable completely
           return { 
             success: false, 
             error: 'Failed to parse analysis result', 
@@ -177,18 +258,23 @@ export class MetaAdAnalysisService {
           success: true,
           data: {
             analysis: parsedAnalysis,
-            sources: adContent,
+            sources: finalAds,
             timestamp: new Date().toISOString(),
+            filteringStats: {
+              totalFetched: allAds.length,
+              afterDeduplication: allAdContent.length,
+              afterKeywordFilter: relevantAds.length,
+              finalAnalyzed: finalAds.length
+            }
           },
         };
       } catch (analysisError) {
         return { 
           success: false, 
           error: `Analysis generation failed: ${analysisError instanceof Error ? analysisError.message : 'Unknown error'}`,
-          rawResponse: { adContent }
+          rawResponse: { adContent: finalAds }
         };
       }
-
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       console.error('Analysis error:', error);
@@ -196,7 +282,121 @@ export class MetaAdAnalysisService {
     }
   }
 
-  // Search Meta Ad Library for ads and remove duplicates
+  // New method to filter ads based on keyword relevance
+  private static filterAdsByKeywordRelevance(
+    query: string,
+    adContent: MetaAdContent[]
+  ): MetaAdContent[] {
+    if (!query || !adContent || adContent.length === 0) {
+      return [];
+    }
+
+    // Prepare query keywords for matching
+    const queryKeywords = this.prepareKeywordsForMatching(query);
+    
+    if (queryKeywords.length === 0) {
+      console.warn('No valid keywords extracted from query');
+      return adContent; // Return all if no keywords could be extracted
+    }
+
+    const relevantAds: MetaAdContent[] = [];
+
+    for (const ad of adContent) {
+      const relevanceScore = this.calculateRelevanceScore(ad, queryKeywords);
+      
+      if (relevanceScore >= this.MIN_RELEVANCE_SCORE) {
+        ad.relevanceScore = relevanceScore;
+        relevantAds.push(ad);
+      }
+    }
+
+    console.log(`Keyword filter: ${queryKeywords.join(', ')} found ${relevantAds.length}/${adContent.length} relevant ads`);
+    
+    return relevantAds;
+  }
+
+  // Extract and prepare keywords from query for matching
+  private static prepareKeywordsForMatching(query: string): string[] {
+    if (!query) return [];
+
+    // Remove common stop words and prepare keywords
+    const stopWords = new Set([
+      'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+      'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+      'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+      'should', 'may', 'might', 'can', 'shall', 'about', 'into', 'through',
+      'during', 'before', 'after', 'above', 'below', 'between', 'among'
+    ]);
+
+    const keywords = query
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ') // Remove punctuation
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !stopWords.has(word))
+      .map(word => word.trim())
+      .filter(Boolean);
+
+    // Also include the original query as a phrase
+    const cleanQuery = query.toLowerCase().replace(/[^\w\s]/g, ' ').trim();
+    if (cleanQuery.length > 3) {
+      keywords.push(cleanQuery);
+    }
+
+    return [...new Set(keywords)]; // Remove duplicates
+  }
+
+  // Calculate relevance score based on keyword matching
+  private static calculateRelevanceScore(
+    ad: MetaAdContent,
+    queryKeywords: string[]
+  ): number {
+    if (!ad || queryKeywords.length === 0) return 0;
+
+    // Prepare ad content for matching
+    const searchableContent = [
+      ad.content || '',
+      ad.title || '',
+      ad.pageName || ''
+    ].join(' ').toLowerCase();
+
+    if (!searchableContent.trim()) return 0;
+
+    let totalScore = 0;
+    let maxPossibleScore = 0;
+
+    for (const keyword of queryKeywords) {
+      maxPossibleScore += 1;
+
+      if (searchableContent.includes(keyword)) {
+        // Base score for keyword presence
+        let keywordScore = 0.5;
+
+        // Bonus for exact word matches (not just substring)
+        const wordRegex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        if (wordRegex.test(searchableContent)) {
+          keywordScore += 0.3;
+        }
+
+        // Bonus for title matches (more important)
+        if ((ad.title || '').toLowerCase().includes(keyword)) {
+          keywordScore += 0.2;
+        }
+
+        // Count frequency (diminishing returns)
+        const frequency = (searchableContent.match(new RegExp(keyword, 'gi')) || []).length;
+        keywordScore += Math.min(frequency * 0.1, 0.5);
+
+        totalScore += Math.min(keywordScore, 1); // Cap individual keyword score at 1
+      }
+    }
+
+    // Normalize score to 0-1 range
+    const normalizedScore = maxPossibleScore > 0 ? totalScore / maxPossibleScore : 0;
+    
+    return Math.min(normalizedScore, 1);
+  }
+
+  // Search Meta Ad Library for ads and remove duplicates - enhanced to fetch more
   private static async searchMetaAds(
     query: string,
     countryCode: string,
@@ -204,7 +404,6 @@ export class MetaAdAnalysisService {
     adType: string,
     limit: number
   ): Promise<MetaAdItem[]> {
-    // Prepare the API URL with query parameters
     const url = new URL('https://meta-ad-library.p.rapidapi.com/search/ads');
     url.searchParams.append('query', query);
     url.searchParams.append('country_code', countryCode);
@@ -212,10 +411,10 @@ export class MetaAdAnalysisService {
     url.searchParams.append('media_types', 'all');
     url.searchParams.append('platform', platform);
     url.searchParams.append('ad_type', adType);
-    url.searchParams.append('search_type', 'keyword_exact_phrase');
+    url.searchParams.append('search_type', 'keyword_unordered'); // Changed to get more diverse results
 
     try {
-      console.log(`Fetching Meta ads for query: ${query}`);
+      console.log(`Fetching Meta ads for query: ${query} (limit: ${limit})`);
       
       const response = await this.fetchWithTimeout(
         url.toString(),
@@ -252,12 +451,13 @@ export class MetaAdAnalysisService {
         }
       }
 
-      // Remove duplicate ads by adArchiveID
+      // Remove duplicate ads by adArchiveID and content similarity
       const uniqueAds = this.removeDuplicateAds(allAds);
       
-      console.log(`Found ${allAds.length} ads, filtered to ${uniqueAds.length} unique ads, limiting to ${limit}`);
+      console.log(`API returned ${allAds.length} ads, filtered to ${uniqueAds.length} unique ads`);
+      
+      // Return more ads than requested since we'll filter by keywords later
       return uniqueAds.slice(0, limit);
-
     } catch (error) {
       console.error('Meta Ad search error:', error);
       throw new Error(
@@ -268,7 +468,7 @@ export class MetaAdAnalysisService {
     }
   }
 
-  // Remove duplicate ads based on content similarity
+  // Remove duplicate ads based on content similarity - enhanced
   private static removeDuplicateAds(ads: MetaAdItem[]): MetaAdItem[] {
     if (!ads || !Array.isArray(ads) || ads.length === 0) {
       return [];
@@ -312,17 +512,25 @@ export class MetaAdAnalysisService {
       }
       
       // Create a simplified signature for content comparison
-      // We're only using the first 100 chars to compare core message, not minor differences
       const contentSignature = contentParts
         .join(' ')
         .replace(/\s+/g, ' ')
         .trim()
         .toLowerCase()
-        .slice(0, 100);
+        .slice(0, 150); // Increased for better uniqueness detection
       
       // Only add the ad if we haven't seen very similar content before
-      if (contentSignature && contentSignature.length > 10) {
-        if (!contentSignatures.has(contentSignature)) {
+      if (contentSignature && contentSignature.length > 20) {
+        // Use fuzzy matching for similar content detection
+        let isDuplicate = false;
+        for (const existingSignature of contentSignatures) {
+          if (this.calculateStringSimilarity(contentSignature, existingSignature) > 0.85) {
+            isDuplicate = true;
+            break;
+          }
+        }
+        
+        if (!isDuplicate) {
           contentSignatures.add(contentSignature);
           uniqueAds.push(ad);
         }
@@ -335,7 +543,22 @@ export class MetaAdAnalysisService {
     return uniqueAds;
   }
 
-  // Extract relevant content from ad objects
+  // Calculate string similarity for better duplicate detection
+  private static calculateStringSimilarity(str1: string, str2: string): number {
+    if (str1 === str2) return 1;
+    if (str1.length === 0 || str2.length === 0) return 0;
+
+    // Simple Jaccard similarity using word sets
+    const words1 = new Set(str1.split(/\s+/));
+    const words2 = new Set(str2.split(/\s+/));
+    
+    const intersection = new Set([...words1].filter(x => words2.has(x)));
+    const union = new Set([...words1, ...words2]);
+    
+    return intersection.size / union.size;
+  }
+
+  // Enhanced method to extract all media URLs from ads
   private static extractContentFromAds(ads: MetaAdItem[]): MetaAdContent[] {
     if (!ads || !Array.isArray(ads)) {
       console.error('Invalid ads data provided to extractContentFromAds');
@@ -373,13 +596,100 @@ export class MetaAdAnalysisService {
         creationTime = new Date(ad.snapshot.creation_time * 1000).toISOString();
       }
       
-      // Find first available image URL
-      let imageUrl: string | undefined;
+      // Extract all image URLs - Enhanced to handle the proper API structure
+      const images: MediaUrl[] = [];
+      
+      // Extract from snapshot.images array (main images)
+      if (ad.snapshot?.images && Array.isArray(ad.snapshot.images)) {
+        for (const imageObj of ad.snapshot.images) {
+          if (typeof imageObj === 'object' && imageObj !== null) {
+            const mediaUrl: MediaUrl = { type: 'image' };
+            
+            if (imageObj.original_image_url) {
+              mediaUrl.original = imageObj.original_image_url;
+            }
+            if (imageObj.resized_image_url) {
+              mediaUrl.resized = imageObj.resized_image_url;
+            }
+            if (imageObj.watermarked_resized_image_url) {
+              mediaUrl.watermarked = imageObj.watermarked_resized_image_url;
+            }
+            
+            // Only add if we have at least one URL
+            if (mediaUrl.original || mediaUrl.resized || mediaUrl.watermarked) {
+              images.push(mediaUrl);
+            }
+          } else if (typeof imageObj === 'string') {
+            // Handle case where images might be direct URL strings
+            images.push({ original: imageObj, type: 'image' });
+          }
+        }
+      }
+      
+      // Extract image URLs from cards
       if (ad.snapshot?.cards && Array.isArray(ad.snapshot.cards)) {
         for (const card of ad.snapshot.cards) {
           if (card.video_preview_image_url) {
-            imageUrl = card.video_preview_image_url;
-            break;
+            images.push({ 
+              preview: card.video_preview_image_url, 
+              type: 'video_preview' 
+            });
+          }
+          if (card.image_url) {
+            images.push({ 
+              original: card.image_url, 
+              type: 'image' 
+            });
+          }
+        }
+      }
+      
+      // Extract all video URLs - Enhanced to handle the proper API structure
+      const videos: VideoUrl[] = [];
+      
+      // Extract from snapshot.videos array
+      if (ad.snapshot?.videos && Array.isArray(ad.snapshot.videos)) {
+        for (const videoObj of ad.snapshot.videos) {
+          if (typeof videoObj === 'object' && videoObj !== null) {
+            const videoUrl: VideoUrl = {};
+            
+            if (videoObj.video_hd_url) {
+              videoUrl.hd = videoObj.video_hd_url;
+            }
+            if (videoObj.video_sd_url) {
+              videoUrl.sd = videoObj.video_sd_url;
+            }
+            if (videoObj.watermarked_video_hd_url) {
+              videoUrl.watermarked_hd = videoObj.watermarked_video_hd_url;
+            }
+            if (videoObj.watermarked_video_sd_url) {
+              videoUrl.watermarked_sd = videoObj.watermarked_video_sd_url;
+            }
+            if (videoObj.video_preview_image_url) {
+              videoUrl.preview_image = videoObj.video_preview_image_url;
+              // Also add preview image to images array
+              images.push({
+                preview: videoObj.video_preview_image_url,
+                type: 'video_preview'
+              });
+            }
+            
+            // Only add if we have at least one video URL
+            if (videoUrl.hd || videoUrl.sd || videoUrl.watermarked_hd || videoUrl.watermarked_sd) {
+              videos.push(videoUrl);
+            }
+          }
+        }
+      }
+      
+      // Extract additional image URLs from HTML content if present
+      if (ad.snapshot?.body?.markup?.__html) {
+        const htmlContent = ad.snapshot.body.markup.__html;
+        const imgRegex = /<img[^>]+src="([^">]+)"/g;
+        let match;
+        while ((match = imgRegex.exec(htmlContent)) !== null) {
+          if (match[1]) {
+            images.push({ original: match[1], type: 'image' });
           }
         }
       }
@@ -395,13 +705,17 @@ export class MetaAdAnalysisService {
         }
       }
       
+      // Remove duplicate URLs from images and videos
+      const uniqueImages = this.removeDuplicateMediaUrls(images);
+      
       return {
         adId: ad.adArchiveID,
         pageId: ad.pageID,
         pageName: ad.pageName,
         content: this.sanitizeText(content),
         title: ad.snapshot?.title,
-        imageUrl,
+        images: uniqueImages,
+        videos: videos,
         linkUrl,
         active: ad.isActive,
         creationTime
@@ -409,7 +723,27 @@ export class MetaAdAnalysisService {
     }).filter(Boolean) as MetaAdContent[];
   }
 
-  // Generate analysis using Groq API
+  // Helper method to remove duplicate media URLs
+  private static removeDuplicateMediaUrls(mediaUrls: MediaUrl[]): MediaUrl[] {
+    const seen = new Set<string>();
+    const unique: MediaUrl[] = [];
+    
+    for (const media of mediaUrls) {
+      // Create a signature from all available URLs
+      const urls = [media.original, media.resized, media.watermarked, media.preview]
+        .filter(Boolean)
+        .join('|');
+      
+      if (urls && !seen.has(urls)) {
+        seen.add(urls);
+        unique.push(media);
+      }
+    }
+    
+    return unique;
+  }
+
+  // Generate analysis using Groq API - Enhanced with filtering context
   private static async generateAdAnalysis(query: string, adContent: MetaAdContent[]): Promise<string> {
     const url = 'https://api.groq.com/openai/v1/chat/completions';
     
@@ -417,17 +751,57 @@ export class MetaAdAnalysisService {
       throw new Error('No ad content available for analysis');
     }
     
-    // Limit content length to keep within API limits
+    // Get model name from Supabase
+    const modelName = await this.getFacebookAdsAnalysisModel();
+    if (!modelName) {
+      throw new Error('Failed to fetch model name from database');
+    }
+    
+    // Enhanced content preparation with media URLs and relevance scores
     const combinedContent = adContent
-      .map(ad => `AD #${ad.adId} from ${ad.pageName}: "${ad.content}"`)
+      .map(ad => {
+        let mediaInfo = '';
+        
+        // Add image information
+        if (ad.images.length > 0) {
+          const imageUrls = ad.images.map(img => {
+            const urls = [];
+            if (img.original) urls.push(`Original: ${img.original}`);
+            if (img.resized) urls.push(`Resized: ${img.resized}`);
+            if (img.preview) urls.push(`Preview: ${img.preview}`);
+            return urls.join(', ');
+          }).join('; ');
+          mediaInfo += `\nImages: ${imageUrls}`;
+        }
+        
+        // Add video information
+        if (ad.videos.length > 0) {
+          const videoUrls = ad.videos.map(video => {
+            const urls = [];
+            if (video.hd) urls.push(`HD: ${video.hd}`);
+            if (video.sd) urls.push(`SD: ${video.sd}`);
+            if (video.preview_image) urls.push(`Preview: ${video.preview_image}`);
+            return urls.join(', ');
+          }).join('; ');
+          mediaInfo += `\nVideos: ${videoUrls}`;
+        }
+        
+        if (!mediaInfo) {
+          mediaInfo = '\nNo media content';
+        }
+        
+        const relevanceInfo = ad.relevanceScore ? ` (Relevance: ${(ad.relevanceScore * 100).toFixed(0)}%)` : '';
+        
+        return `AD #${ad.adId} from ${ad.pageName}${relevanceInfo}: "${ad.content}"${mediaInfo}`;
+      })
       .join('\n\n')
-      .slice(0, 8000); // Ensure we don't exceed token limits
+      .slice(0, 12000); // Increased limit to accommodate media URLs
     
     if (!combinedContent.trim()) {
       throw new Error('Empty content after processing ad data');
     }
     
-    console.log(`Generating analysis for query: ${query} with ${adContent.length} ads`);
+    console.log(`Generating analysis for query: ${query} with ${adContent.length} filtered/relevant ads using model: ${modelName}`);
     
     const analysisPrompt = {
       role: 'system',
@@ -443,7 +817,7 @@ export class MetaAdAnalysisService {
       "effectiveness": "Numerical value 1-10 indicating estimated effectiveness",
       "examples": ["Array of 2-3 brief example phrases from the ads"]
     }
-  ] (exactly 4 items),
+  ] (exactly 6 items),
   "visualTactics": [
     {
       "tactic": "Name of the visual or design approach",
@@ -468,9 +842,18 @@ export class MetaAdAnalysisService {
       "strength": "Numerical value 1-10 indicating potential effectiveness",
       "conversionPotential": "Assessment of conversion likelihood"
     }
-  ] (exactly 2 items),
+  ] (exactly 3 items),
   "recommendedCounterStrategies": "Strategic insights for countering these competitor approaches"
 }
+
+NOTE: These ads have been pre-filtered to contain keywords related to "${query}", so they are highly relevant to your analysis. Focus on the most impactful patterns and strategies.
+
+Analyze both the textual content and the visual elements based on the image and video URLs provided. Pay special attention to:
+- Visual consistency across campaigns
+- Use of video vs. image content
+- Quality of media (HD vs SD options available)
+- Preview image strategies for videos
+- Keyword integration and messaging alignment
 
 Ensure the analysis is data-driven, uses professional marketing terminology, and provides actionable intelligence for developing competitive ad strategies. Do not repeat the same point across different sections - each insight should be unique and specific.
 
@@ -478,7 +861,7 @@ IMPORTANT: Return VALID JSON only with no additional text before or after the JS
     };
 
     const payload = {
-      model: 'deepseek-r1-distill-qwen-32b',
+      model: modelName,      
       messages: [
         analysisPrompt,
         {
@@ -486,7 +869,7 @@ IMPORTANT: Return VALID JSON only with no additional text before or after the JS
           content: combinedContent,
         },
       ],
-      temperature: 0.7,
+      temperature: 0.2,
       max_tokens: 4000,
       response_format: { type: 'json_object' },
     };
@@ -513,7 +896,6 @@ IMPORTANT: Return VALID JSON only with no additional text before or after the JS
           const errorData = await response.json();
           errorMessage += ` - ${JSON.stringify(errorData)}`;
         } catch {
-          // Removed the unused variable completely
           // Unable to parse error JSON
         }
         throw new Error(errorMessage);
@@ -526,13 +908,11 @@ IMPORTANT: Return VALID JSON only with no additional text before or after the JS
       }
       
       const analysis = data.choices[0].message.content;
-
       if (!analysis) {
         throw new Error('No analysis content in Groq API response');
       }
 
       return analysis;
-
     } catch (error) {
       console.error('Groq API error:', error);
       throw new Error(

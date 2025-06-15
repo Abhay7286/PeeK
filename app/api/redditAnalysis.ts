@@ -1,8 +1,10 @@
+// app/api/redditAnalysis.ts
 export interface RedditResult {
   title: string;
   subreddit: string;
   snippet: string;
   link?: string;
+  source_url?: string; // Added source URL from Reddit API
   engagement_metrics?: {
     upvote_ratio: number;
     comment_count: number;
@@ -21,6 +23,7 @@ export interface PainPoint {
   impact_score: number; // 0-100
   verbatim_quotes: string[];
   suggested_solutions: string[];
+  sources?: string[]; // Added sources for pain points
 }
 
 export interface NicheCommunity {
@@ -30,6 +33,7 @@ export interface NicheCommunity {
   engagement_level: number; // 0-100
   influence_score: number; // 0-100
   key_influencers: string[];
+  sources?: string[]; // Added sources for niche communities
 }
 
 export interface SentimentAnalysis {
@@ -39,6 +43,7 @@ export interface SentimentAnalysis {
     intensity: number; // 0-100
     context: string;
     activation_phrases: string[];
+    sources?: string[]; // Added sources for emotional triggers
   }[];
   brand_perception: {
     positive_attributes: string[];
@@ -63,288 +68,222 @@ export interface MarketingInsight {
     competitive_advantages: string[];
     threat_assessment: string;
   };
+  sources: string[]; // Added overall sources array
 }
 
-// Interfaces for Reddit API responses
-interface RedditAuthResponse {
-  access_token: string;
+export interface SearchParams {
+  relevance?: 'relevance' | 'hot' | 'new' | 'top' | 'comments';
+  timeframe?: 'all' | 'year' | 'month' | 'week' | 'day' | 'hour';
 }
 
-interface RedditPostData {
-  title: string;
-  subreddit: string;
-  selftext: string;
-  permalink: string;
-  url: string;
-  upvote_ratio: number;
-  num_comments: number;
-  total_awards_received: number;
-}
-
-interface RedditPost {
-  kind: string;
-  data: RedditPostData;
-}
-
-interface RedditSearchResponse {
-  data: {
-    children: RedditPost[];
+// Response interface including metadata
+export interface RedditAnalyticsResponse {
+  results: RedditResult[];
+  insights: MarketingInsight;
+  metadata?: {
+    total_posts_found: number;
+    quality_posts_processed: number;
+    search_params: SearchParams;
+    total_sources: number;
+    unique_sources: number;
+    timestamp: string;
   };
-}
-
-interface RedditCommentData {
-  body: string;
-  score: number;
-  author: string;
-  stickied: boolean;
-}
-
-interface RedditComment {
-  kind: string;
-  data: RedditCommentData;
-}
-
-interface RedditCommentsResponse {
-  [index: number]: {
-    data: {
-      children: RedditComment[];
-    };
-  };
-}
-
-// Interface for the data sent to Groq API
-interface GroqInputItem {
-  title: string;
-  subreddit: string;
-  content: string;
-  comments: string;
-  engagement: {
-    upvote_ratio?: number;
-    comment_count?: number;
-  };
-}
-
-// Interface for Groq API response
-interface GroqResponse {
-  choices: {
-    message: {
-      content: string;
-    };
-  }[];
 }
 
 export const fetchMarketingInsights = async (
-  query: string
-): Promise<{ results: RedditResult[]; insights: MarketingInsight } | null> => {
+  query: string,
+  params?: SearchParams
+): Promise<RedditAnalyticsResponse | null> => {
   try {
-    const redditClientId = process.env.NEXT_PUBLIC_REDDIT_CLIENT_ID;
-    const redditClientSecret = process.env.NEXT_PUBLIC_REDDIT_CLIENT_SECRET;
-    const groqApiKey = process.env.NEXT_PUBLIC_GROQ_API_KEY;
-
-    if (!redditClientId || !redditClientSecret || !groqApiKey) {
-      throw new Error("API keys are missing. Check environment variables.");
+    if (!query || !query.trim()) {
+      throw new Error("Query parameter is required");
     }
 
-    // Reddit Authentication
-    const authResponse = await fetch('https://www.reddit.com/api/v1/access_token', {
+    const requestBody = { 
+      query: query.trim(),
+      ...(params && { params })
+    };
+
+    const response = await fetch('/api/reddit-analytics', {
       method: 'POST',
       headers: {
-        'Authorization': `Basic ${Buffer.from(`${redditClientId}:${redditClientSecret}`).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/json',
       },
-      body: 'grant_type=client_credentials',
+      body: JSON.stringify(requestBody),
     });
 
-    if (!authResponse.ok) {
-      throw new Error(`Reddit Authentication error: ${authResponse.status}`);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
     }
 
-    const authData = await authResponse.json() as RedditAuthResponse;
-    const accessToken = authData.access_token;
-
-    // Focus on most relevant subreddits and get only 5 posts
-    const subreddits = [
-      'technology', 'products', 'business', 'marketing',
-      'startups', 'entrepreneurship', 'productmanagement'
-    ];
-    
-    const results: RedditResult[] = [];
-    let totalPosts = 0;
-
-    // Keep searching until we have 5 relevant posts
-    for (const subreddit of subreddits) {
-      if (totalPosts >= 5) break;
-      
-      const searchResponse = await fetch(
-        `https://oauth.reddit.com/r/${subreddit}/search?q=${encodeURIComponent(query)}&limit=5&sort=relevance`,
-        {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'User-Agent': 'MarketingInsights/3.0',
-          },
-        }
-      );
-
-      if (!searchResponse.ok) continue;
-
-      const searchData = await searchResponse.json() as RedditSearchResponse;
-      
-      // Filter posts with actual content
-      const relevantPosts = searchData.data.children
-        .filter((post: RedditPost) => 
-          post.data.selftext && 
-          post.data.selftext.length > 50 &&
-          post.data.num_comments > 0
-        );
-      
-      for (const post of relevantPosts) {
-        if (totalPosts >= 5) break;
-        
-        // Get comments for this post
-        const commentsResponse = await fetch(
-          `https://oauth.reddit.com${post.data.permalink}?limit=10&depth=1`,
-          {
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'User-Agent': 'MarketingInsights/3.0',
-            },
-          }
-        );
-        
-        if (!commentsResponse.ok) continue;
-        
-        const commentsData = await commentsResponse.json() as RedditCommentsResponse;
-        
-        // Extract top 5 comments (if available)
-        const topComments = commentsData[1]?.data?.children
-          .filter((comment: RedditComment) => 
-            comment.kind === 't1' && 
-            comment.data?.body && 
-            !comment.data.stickied
-          )
-          .sort((a: RedditComment, b: RedditComment) => b.data.score - a.data.score)
-          .slice(0, 5)
-          .map((comment: RedditComment) => ({
-            body: comment.data.body,
-            score: comment.data.score,
-            author: comment.data.author
-          })) || [];
-        
-        results.push({
-          title: post.data.title,
-          subreddit: post.data.subreddit,
-          snippet: post.data.selftext.slice(0, 300) + (post.data.selftext.length > 300 ? "..." : ""),
-          link: post.data.permalink ? `https://reddit.com${post.data.permalink}` : post.data.url,
-          engagement_metrics: {
-            upvote_ratio: post.data.upvote_ratio,
-            comment_count: post.data.num_comments,
-            awards: post.data.total_awards_received || 0
-          },
-          top_comments: topComments
-        });
-        
-        totalPosts++;
-      }
-    }
-
-    if (results.length === 0) {
-      throw new Error("Insufficient data from Reddit Search API.");
-    }
-
-    // Prepare a more focused dataset for Groq to reduce token usage
-    const groqInputData: GroqInputItem[] = results.map(post => ({
-      title: post.title,
-      subreddit: post.subreddit,
-      content: post.snippet,
-      comments: post.top_comments?.map(c => c.body).join(" | ").slice(0, 500) || "",
-      engagement: {
-        upvote_ratio: post.engagement_metrics?.upvote_ratio,
-        comment_count: post.engagement_metrics?.comment_count
-      }
-    }));
-
-    // Streamlined Groq API prompt
-    const context = `As a specialized market research analyst, analyze these Reddit discussions to provide marketing insights. Focus on key trends, consumer sentiment, and actionable recommendations. Return findings in JSON format:
-    {
-      "overview": "Brief analysis of market dynamics and consumer behavior patterns",
-      "recurring_pain_points": [
-        {
-          "issue": "Specific pain point",
-          "frequency": 80,
-          "impact_score": 75,
-          "verbatim_quotes": ["Selected user quotes"],
-          "suggested_solutions": ["Actionable recommendations"]
-        }
-      ],
-      "niche_communities": [
-        {
-          "segment": "Market segment",
-          "demographic_indicators": ["Observable patterns"],
-          "discussion_themes": ["Conversation topics"],
-          "engagement_level": 85,
-          "influence_score": 70,
-          "key_influencers": ["Notable community members"]
-        }
-      ],
-      "sentiment_analysis": {
-        "overall_sentiment": 65,
-        "emotional_triggers": [
-          {
-            "trigger": "Emotional catalyst",
-            "intensity": 80,
-            "context": "Situation analysis",
-            "activation_phrases": ["Trigger phrases"]
-          }
-        ],
-        "brand_perception": {
-          "positive_attributes": ["Brand strengths"],
-          "negative_attributes": ["Areas of concern"],
-          "neutral_observations": ["Market observations"]
-        }
-      },
-      "psychographic_insights": {
-        "motivation_factors": ["Purchase drivers"],
-        "decision_drivers": ["Decision factors"],
-        "adoption_barriers": ["Adoption obstacles"]
-      },
-      "competitive_intelligence": {
-        "market_positioning": "Competitive landscape analysis",
-        "share_of_voice": 65,
-        "competitive_advantages": ["Market advantages"],
-        "threat_assessment": "Competitive risk assessment"
-      }
-    }
-
-    Give creative, not generic ideas. Use professional marketing terminology.
-    Provide 6 pain points, 3 niche communities, and 3 emotional triggers.`;
-
-    const insightResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${groqApiKey}`,
-      },
-      body: JSON.stringify({
-        model: "deepseek-r1-distill-qwen-32b",
-        messages: [
-          { role: "system", content: context },
-          { role: "user", content: JSON.stringify(groqInputData) },
-        ],
-        temperature: 0.7,
-        max_tokens: 3000,
-        response_format: { type: 'json_object' },
-      }),
-    });
-
-    if (!insightResponse.ok) {
-      throw new Error(`Groq API error: ${insightResponse.status}`);
-    }
-
-    const insightData = await insightResponse.json() as GroqResponse;
-    const insights: MarketingInsight = JSON.parse(insightData.choices[0].message.content);
-    return { results, insights };
+    const data: RedditAnalyticsResponse = await response.json();
+    return data;
   } catch (error) {
     console.error("Error in fetchMarketingInsights:", error);
-    return null;
+    throw error;
+  }
+};
+
+// Helper function to extract all sources from insights
+export const getAllSources = (insights: MarketingInsight): string[] => {
+  const sources = new Set<string>();
+  
+  // Add main sources
+  if (insights.sources) {
+    insights.sources.forEach(source => sources.add(source));
+  }
+  
+  // Add pain point sources
+  insights.recurring_pain_points.forEach(painPoint => {
+    if (painPoint.sources) {
+      painPoint.sources.forEach(source => sources.add(source));
+    }
+  });
+  
+  // Add niche community sources
+  insights.niche_communities.forEach(community => {
+    if (community.sources) {
+      community.sources.forEach(source => sources.add(source));
+    }
+  });
+  
+  // Add emotional trigger sources
+  insights.sentiment_analysis.emotional_triggers.forEach(trigger => {
+    if (trigger.sources) {
+      trigger.sources.forEach(source => sources.add(source));
+    }
+  });
+  
+  return Array.from(sources);
+};
+
+// Helper function to get sources for a specific insight type
+export const getSourcesByType = (insights: MarketingInsight, type: 'pain_points' | 'communities' | 'triggers'): string[] => {
+  const sources = new Set<string>();
+  
+  switch (type) {
+    case 'pain_points':
+      insights.recurring_pain_points.forEach(painPoint => {
+        if (painPoint.sources) {
+          painPoint.sources.forEach(source => sources.add(source));
+        }
+      });
+      break;
+      
+    case 'communities':
+      insights.niche_communities.forEach(community => {
+        if (community.sources) {
+          community.sources.forEach(source => sources.add(source));
+        }
+      });
+      break;
+      
+    case 'triggers':
+      insights.sentiment_analysis.emotional_triggers.forEach(trigger => {
+        if (trigger.sources) {
+          trigger.sources.forEach(source => sources.add(source));
+        }
+      });
+      break;
+  }
+  
+  return Array.from(sources);
+};
+
+// Helper function to check if a URL is a Reddit link
+export const isRedditLink = (url: string): boolean => {
+  return url.includes('reddit.com');
+};
+
+// Helper function to format source links for display
+export const formatSourceLink = (url: string): { display: string; isReddit: boolean } => {
+  try {
+    const urlObj = new URL(url);
+    const isReddit = isRedditLink(url);
+    
+    if (isReddit) {
+      // Extract subreddit and post info for Reddit links
+      const pathParts = urlObj.pathname.split('/').filter(part => part);
+      if (pathParts.length >= 4 && pathParts[0] === 'r') {
+        const subreddit = pathParts[1];
+        const title = pathParts[3].replace(/_/g, ' ');
+        return {
+          display: `r/${subreddit}: ${title.slice(0, 50)}${title.length > 50 ? '...' : ''}`,
+          isReddit: true
+        };
+      }
+      return { display: 'Reddit Discussion', isReddit: true };
+    } else {
+      // Format external sources
+      return {
+        display: `${urlObj.hostname}${urlObj.pathname.length > 1 ? urlObj.pathname.slice(0, 30) + '...' : ''}`,
+        isReddit: false
+      };
+    }
+  } catch {
+    return { display: url.slice(0, 50) + '...', isReddit: isRedditLink(url) };
+  }
+};
+
+// Extended search parameters with more options
+export interface ExtendedSearchParams extends SearchParams {
+  include_sources?: boolean; // Whether to include source URLs in analysis
+  max_posts?: number; // Maximum number of posts to analyze
+  min_engagement?: number; // Minimum engagement threshold
+}
+
+// Advanced fetch function with extended parameters
+export const fetchMarketingInsightsAdvanced = async (
+  query: string,
+  params?: ExtendedSearchParams
+): Promise<RedditAnalyticsResponse | null> => {
+  try {
+    if (!query || !query.trim()) {
+      throw new Error("Query parameter is required");
+    }
+
+    const requestBody = { 
+      query: query.trim(),
+      ...(params && { params })
+    };
+
+    const response = await fetch('/api/reddit-analytics', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: RedditAnalyticsResponse = await response.json();
+    
+    // Post-process to ensure sources are properly formatted
+    if (data.insights && data.results) {
+      // Ensure all results have source URLs
+      data.results.forEach(result => {
+        if (!result.source_url && result.link) {
+          result.source_url = result.link;
+        }
+      });
+      
+      // Ensure insights have source arrays if not provided
+      if (!data.insights.sources) {
+        data.insights.sources = data.results
+          .map(result => [result.link, result.source_url])
+          .flat()
+          .filter((url): url is string => !!url);
+      }
+    }
+    
+    return data;
+  } catch (error) {
+    console.error("Error in fetchMarketingInsightsAdvanced:", error);
+    throw error;
   }
 };

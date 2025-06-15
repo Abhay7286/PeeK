@@ -1,11 +1,11 @@
 /* Reddit Analytics Marketing Insights Design System */
 :root {
-  /* Core Color Palette */
+  /* Core Color Palette - All Reddit Red */
   --color-primary: #FF4500;
-  --color-pain-points: #FF5700;
-  --color-communities: #0079D3;
-  --color-sentiment: #46D160;
-  --color-source: #7E53C1;
+  --color-pain-points: #FF4500;
+  --color-communities: #FF4500;
+  --color-sentiment: #FF4500;
+  --color-source: #FF4500;
   
   /* Dark Mode Foundations */
   --background-deep: #0a0a0c;
@@ -59,19 +59,21 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  color: var(--color-primary);
 }
 
-/* Section-specific colors */
-.pain-points h2 { color: var(--color-pain-points); }
-.communities h2 { color: var(--color-communities); }
-.sentiment h2 { color: var(--color-sentiment); }
-.source-data h2 { color: var(--color-source); }
+/* All section headers use Reddit red */
+.pain-points h2 { color: var(--color-primary); }
+.communities h2 { color: var(--color-primary); }
+.sentiment h2 { color: var(--color-primary); }
+.source-data h2 { color: var(--color-primary); }
 
-/* Progress Bar Customization */
-.pain-points .progress-bar { background-color: var(--color-pain-points); }
-.communities .progress-bar { background-color: var(--color-communities); }
-.sentiment .progress-bar { background-color: var(--color-sentiment); }
-.source-data .progress-bar { background-color: var(--color-source); }
+/* Progress Bar Customization - All Reddit red */
+.progress-bar { background-color: var(--color-primary); }
+.pain-points .progress-bar { background-color: var(--color-primary); }
+.communities .progress-bar { background-color: var(--color-primary); }
+.sentiment .progress-bar { background-color: var(--color-primary); }
+.source-data .progress-bar { background-color: var(--color-primary); }
 
 /* Loading Animation */
 .analytics-loader {
@@ -105,6 +107,37 @@ body {
   padding-left: 1.25rem;
 }
 
+/* Links and Highlights */
+a, .highlight {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Card styling */
+.analytics-card {
+  background-color: var(--background-surface);
+  border: 1px solid rgba(255, 69, 0, 0.1);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.analytics-card:hover {
+  border-color: rgba(255, 69, 0, 0.5);
+  box-shadow: 0 0 15px rgba(255, 69, 0, 0.15);
+}
+
+/* Subreddit link styling */
+.subreddit {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+/* Spacing utilities */
 .space-y-1 > * + * {
   margin-top: 0.25rem;
 }
@@ -147,7 +180,11 @@ body {
 }
 
 .text-destructive {
-  color: #ff4444;
+  color: var(--color-primary);
+}
+
+.text-primary {
+  color: var(--color-primary);
 }
 
 .text-sm { font-size: 0.875rem; }
@@ -167,6 +204,41 @@ body {
 .mb-6 { margin-bottom: 1.5rem; }
 .mb-8 { margin-bottom: 2rem; }
 
+/* Button Styling */
+.btn {
+  background-color: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 0.375rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.btn:hover {
+  background-color: #E03D00;
+}
+
+.btn:active {
+  background-color: #CC3700;
+}
+
+/* Badge Styling */
+.badge {
+  background-color: rgba(255, 69, 0, 0.15);
+  color: var(--color-primary);
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* Icons */
+.icon {
+  color: var(--color-primary);
+}
+
 /* Print Styles */
 @media print {
   body {
@@ -179,5 +251,9 @@ body {
     background: white;
     border: 1px solid #eee;
     box-shadow: none;
+  }
+  
+  .text-primary, .icon, h2, .subreddit {
+    color: #FF4500 !important;
   }
 }

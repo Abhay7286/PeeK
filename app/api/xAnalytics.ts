@@ -1,4 +1,11 @@
 import { useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize Supabase client
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 // Twitter API Response Types
 interface TwitterAPITweet {
@@ -20,101 +27,92 @@ interface TwitterAPIResponse {
   status?: string;
 }
 
-// Enhanced Tweet Types for Marketing Analysis
+// Enhanced Tweet Types
 interface EnhancedTweet {
   content: string;
   engagement: number;
   created_at: string;
-  influence_score: number; // New: Combines followers + engagement
-  hashtags: string[];      // New: Extracted hashtags
-  mentions: string[];      // New: User mentions
+  author: string;
+  hashtags: string[];
+  mentions: string[];
 }
 
-// Expanded Analysis Result Types
-interface SentimentAnalysis {
-  score: number;
-  label: 'positive' | 'negative' | 'neutral';
-  confidence: number;
-  keywords: string[]; // New: Key terms driving sentiment
-}
-
-interface ContentPattern {
-  pattern: string;
+// Trend Analysis Types
+interface Trigger {
+  name: string;
   description: string;
+  impact_score: number; // 1-10 scale
   frequency: number;
   examples: string[];
-  relevance: number; // New: Marketing relevance score
 }
 
-interface TopTweet {
-  content: string;
-  engagement: number;
-  reason: string;
-  influence_score: number; // New: Influence metric
-}
-
-interface CompetitorMention {
+interface Trend {
   name: string;
-  frequency: number;
-  sentiment: 'positive' | 'negative' | 'neutral';
+  description: string;
+  popularity_score: number; // 1-10 scale
+  growth_rate: number; // Percentage
+  examples: string[];
 }
 
-interface MarketInsights {
-  userSentiment: string;
-  competitorAnalysis: CompetitorMention[]; // New: Competitor analysis
-  targetDemographics: string[]; // New: Inferred demographics
-  actionableInsights: string[];
-  marketingRecommendations: {   // New: Structured marketing recommendations
-    contentStrategy: string[];
-    engagementTactics: string[];
-    brandPositioning: string;
-  };
+interface UpcomingTrend {
+  name: string;
+  description: string;
+  prediction_confidence: number; // 1-10 scale
+  potential_impact: number; // 1-10 scale
+  early_indicators: string[];
 }
 
-interface TemporalAnalysis {  // New: Time-based patterns
-  patterns: {
-    timeOfDay: string[];
-    dayOfWeek: string[];
-  };
-  trends: {
-    emerging: string[];
-    fading: string[];
-  };
+// Analysis Result Types
+interface SentimentAnalysis {
+  score: number; // -1 to 1
+  label: 'positive' | 'negative' | 'neutral';
+  confidence: number; // 0-1
 }
 
 interface Analysis {
   overview: string;
   sentimentAnalysis: SentimentAnalysis;
-  contentPatterns: ContentPattern[];
-  engagement: {
-    topTweets: TopTweet[];
-    hashtags: { tag: string; count: number; relevance: number }[]; // New: Hashtag analysis
+  triggers: Trigger[]; // Exactly 3
+  currentTrends: Trend[]; // Exactly 3
+  upcomingTrends: UpcomingTrend[]; // Exactly 3
+  relevantHashtags: { tag: string; count: number; relevance: number }[]; // Top 5
+  trendInsights: {
+    comparisons: string[];
+    actionableInsights: string[];
+    demographicPatterns: string[];
   };
-  marketInsights: MarketInsights;
-  temporalAnalysis: TemporalAnalysis; // New: Time-based analysis
 }
 
 interface AnalysisResult {
   success: boolean;
   data?: {
     analysis: Analysis;
-    sources: EnhancedTweet[];
+    tweets: EnhancedTweet[]; // Raw tweets for frontend display
     timestamp: string;
   };
   error?: string;
+}
+
+export async function getXAnalyticsModel() {
+  const { data } = await supabase
+    .from('api_models')
+    .select('model_name')
+    .eq('api_name', 'XAnalytics')
+    .single();
+  
+  return data?.model_name;
 }
 
 export class TwitterAnalysisService {
   private static readonly CONFIG = {
     TWITTER_API_URL: 'https://twitter-api45.p.rapidapi.com/search.php',
     TIMEOUT: 30000,
-    MAX_TWEETS: 50, // Increased for better sample size
-    MAX_TWEETS_FOR_ANALYSIS: 30, // Increased for better analysis
+    MAX_TWEETS: 50,
+    MAX_TWEETS_FOR_ANALYSIS: 30,
     MAX_CONTENT_LENGTH: 100,
-    GROQ_MODEL: 'deepseek-r1-distill-qwen-32b',
     API_KEYS: {
-      RAPID_API: process.env.NEXT_PUBLIC_XRAPID_API_KEY,
-      GROQ: process.env.NEXT_PUBLIC_GROQ_API_KEY
+      RAPID_API: process.env.NEXT_PUBLIC_X_RAPID_API_KEY,
+      GROQ: process.env.NEXT_PUBLIC_X_GROQ_API_KEY
     },
     RETRY: {
       MAX_ATTEMPTS: 3,
@@ -179,7 +177,6 @@ export class TwitterAnalysisService {
     }
   }
 
-  // New method to extract hashtags from tweet text
   private static extractHashtags(text: string): string[] {
     const hashtags: string[] = [];
     const regex = /#[\w\u0590-\u05ff]+/g;
@@ -192,7 +189,6 @@ export class TwitterAnalysisService {
     return hashtags;
   }
   
-  // New method to extract mentions from tweet text
   private static extractMentions(text: string): string[] {
     const mentions: string[] = [];
     const regex = /@[\w]+/g;
@@ -205,16 +201,8 @@ export class TwitterAnalysisService {
     return mentions;
   }
 
-  // New method to calculate influence score
-  private static calculateInfluenceScore(followers: number = 0, engagement: number = 0): number {
-    // Simple weighted formula that values both reach and engagement
-    return (followers * 0.7) + (engagement * 1.3);
-  }
-
   public static async analyzeTweets(query: string, options?: {
-    competitors?: string[],
-    industry?: string,
-    marketSegment?: string
+    industry?: string
   }): Promise<AnalysisResult> {
     try {
       if (!query?.trim()) {
@@ -223,6 +211,12 @@ export class TwitterAnalysisService {
 
       if (!this.CONFIG.API_KEYS.RAPID_API || !this.CONFIG.API_KEYS.GROQ) {
         return { success: false, error: 'API keys not configured' };
+      }
+
+      // Fetch model name from Supabase
+      const modelName = await getXAnalyticsModel();
+      if (!modelName) {
+        return { success: false, error: 'Failed to fetch model configuration' };
       }
 
       const searchUrl = new URL(this.CONFIG.TWITTER_API_URL);
@@ -260,32 +254,29 @@ export class TwitterAnalysisService {
             content,
             engagement,
             created_at: tweet.created_at || new Date().toISOString(),
-            influence_score: this.calculateInfluenceScore(tweet.followers_count, engagement),
+            author: tweet.screen_name || 'anonymous',
             hashtags,
             mentions
           };
         })
-        .sort((a: EnhancedTweet, b: EnhancedTweet) => b.influence_score - a.influence_score)
+        .sort((a: EnhancedTweet, b: EnhancedTweet) => b.engagement - a.engagement)
         .slice(0, this.CONFIG.MAX_TWEETS_FOR_ANALYSIS);
 
       if (tweets.length === 0) {
         return { success: false, error: 'No valid tweets found' };
       }
 
-      // Enhanced analysis context with more marketing-focused data
       const analysisContext = {
         query,
         sampleSize: tweets.length,
         industry: options?.industry || 'general',
-        marketSegment: options?.marketSegment || 'general',
-        competitors: options?.competitors || [],
         tweets: tweets.map(t => ({
           content: t.content,
           engagement: t.engagement,
-          influence_score: t.influence_score,
+          created_at: t.created_at,
+          author: t.author,
           hashtags: t.hashtags,
-          mentions: t.mentions,
-          created_at: t.created_at
+          mentions: t.mentions
         }))
       };
 
@@ -298,19 +289,19 @@ export class TwitterAnalysisService {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: this.CONFIG.GROQ_MODEL,
+            model: modelName, // Use dynamic model name from Supabase
             messages: [
               {
                 role: 'system',
-                content: this.getMarketingAnalysisPrompt(query, options)
+                content: this.getTrendsAnalysisPrompt(query, options)
               },
               {
                 role: 'user',
                 content: JSON.stringify(analysisContext)
               }
             ],
-            temperature: 0.7, // Lower temperature for more consistent marketing insights
-            max_tokens: 4000, // Increased for more detailed analysis
+            temperature: 0.4,
+            max_tokens: 3000,
             response_format: { type: 'json_object' }
           })
         }
@@ -327,7 +318,7 @@ export class TwitterAnalysisService {
         success: true,
         data: {
           analysis: JSON.parse(analysis),
-          sources: tweets,
+          tweets, // Pass raw tweets for frontend display
           timestamp: new Date().toISOString()
         }
       };
@@ -339,98 +330,90 @@ export class TwitterAnalysisService {
     }
   }
 
-  private static getMarketingAnalysisPrompt(query: string, options?: {
-    competitors?: string[],
-    industry?: string,
-    marketSegment?: string
+  private static getTrendsAnalysisPrompt(query: string, options?: {
+    industry?: string
   }): string {
-    const competitors = options?.competitors?.join(', ') || 'unknown';
     const industry = options?.industry || 'general';
-    const marketSegment = options?.marketSegment || 'general';
     
-    return `You are an expert marketing analyst with deep experience in social media analytics, consumer psychology, and market research. 
+    return `You are an expert social media trend analyst with deep expertise in identifying patterns, sentiment shifts, and emerging movements in social media data.
     
-Your task is to analyze tweets about "${query}" in the ${industry} industry, focusing on the ${marketSegment} market segment. Competitors include: ${competitors}.
+Your task is to analyze tweets about "${query}" in the ${industry} industry and provide actionable trend insights.
 
-Analyze the provided tweets for marketing insights. Pay special attention to:
-1. Consumer sentiment and emotional responses
-2. Brand perception and positioning opportunities
-3. Competitive landscape and differentiators
-4. Content patterns that drive engagement
-5. Potential market segments and audience demographics
-6. Temporal patterns and emerging trends
+Analyze the provided tweets with specific focus on:
+1. Identifying exactly 3 key triggers (events or themes that provoke responses)
+2. Identifying exactly 3 current trends (popular topics or patterns)
+3. Predicting exactly 3 upcoming trends (emerging patterns with potential growth)
+4. Providing detailed trend insights that go beyond basic statistics
 
-Provide an executive-level marketing analysis with actionable insights in the following JSON format:
+Provide an analysis in the following JSON format:
 
 {
-  "overview": "Concise executive summary of key marketing findings",
+  "overview": "Concise summary of key findings limited to 2-3 sentences",
   
   "sentimentAnalysis": {
     "score": "Number from -1 to 1",
     "label": "positive/negative/neutral",
-    "confidence": "0-1 confidence score",
-    "keywords": ["3-5 key terms driving sentiment"]
+    "confidence": "0-1 confidence score"
   },
   
-  "contentPatterns": [
+  "triggers": [
     {
-      "pattern": "Pattern name",
-      "description": "Marketing-relevant description",
-      "frequency": "1-10 score",
-      "examples": ["1-2 representative examples"],
-      "relevance": "1-10 marketing relevance score"
+      "name": "Clear name of the trigger",
+      "description": "Concise explanation of this trigger",
+      "impact_score": "Impact score (1-10)",
+      "frequency": "Frequency count or estimate",
+      "examples": ["1-2 representative tweet examples"]
     }
-  ] (3-5 items),
+  ] (exactly 3 items),
   
-  "engagement": {
-    "topTweets": [
-      {
-        "content": "Tweet content",
-        "engagement": "Numeric score",
-        "reason": "Marketing-focused explanation",
-        "influence_score": "Numeric influence score"
-      }
-    ] (3 items),
-    "hashtags": [
-      {
-        "tag": "Hashtag",
-        "count": "Frequency",
-        "relevance": "1-10 marketing relevance"
-      }
-    ] (top 5)
-  },
+  "currentTrends": [
+    {
+      "name": "Clear name of the trend",
+      "description": "Concise explanation of this trend",
+      "popularity_score": "Popularity score (1-10)",
+      "growth_rate": "Estimated percentage growth",
+      "examples": ["1-2 representative tweet examples"]
+    }
+  ] (exactly 3 items),
   
-  "marketInsights": {
-    "userSentiment": "Detailed view of customer sentiment toward the brand/product",
-    "competitorAnalysis": [
-      {
-        "name": "Competitor name",
-        "frequency": "Mention count",
-        "sentiment": "positive/negative/neutral"
-      }
+  "upcomingTrends": [
+    {
+      "name": "Clear name of the emerging trend",
+      "description": "Concise explanation of this potential trend",
+      "prediction_confidence": "Confidence score (1-10)",
+      "potential_impact": "Potential impact score (1-10)",
+      "early_indicators": ["1-2 early signs of this trend"]
+    }
+  ] (exactly 3 items),
+  
+  "relevantHashtags": [
+    {
+      "tag": "Hashtag",
+      "count": "Frequency",
+      "relevance": "Relevance score (1-10)"
+    }
+  ] (top 5 only),
+  
+  "trendInsights": {
+    "comparisons": [
+      "How current trends compare to previous industry patterns",
+      "Cross-industry trend comparisons when relevant",
+      "Audience reception differences between competing trends"
     ],
-    "targetDemographics": ["3-5 inferred audience segments"],
-    "actionableInsights": ["3-5 direct actionable insights"],
-    "marketingRecommendations": {
-      "contentStrategy": ["3-4 specific content approaches"],
-      "engagementTactics": ["3-4 ways to increase engagement"],
-      "brandPositioning": "Recommended positioning statement"
-    }
-  },
-  
-  "temporalAnalysis": {
-    "patterns": {
-      "timeOfDay": ["When engagement peaks"],
-      "dayOfWeek": ["Best days for engagement"]
-    },
-    "trends": {
-      "emerging": ["2-3 emerging topics"],
-      "fading": ["2-3 declining topics"]
-    }
+    "actionableInsights": [
+      "Specific ways businesses can capitalize on these trends",
+      "Recommended content strategies based on trend analysis",
+      "Optimal engagement approaches for identified trends"
+    ],
+    "demographicPatterns": [
+      "Notable demographic patterns in trend engagement",
+      "Audience segments most responsive to each trend",
+      "Geographic or cultural variations in trend adoption"
+    ]
   }
 }
 
-Focus on marketing strategy, consumer psychology, and actionable business insights. Be specific, data-driven, and practical in your recommendations.`;
+Your analysis should be highly specific to the ${industry} industry and provide genuinely valuable trend intelligence. Focus on revealing hidden patterns, unexpected connections, and actionable strategic insights rather than surface-level observations. Identify what makes each trend uniquely relevant to this topic and why it matters.`;
   }
 
   private static sanitizeText(text: string, maxLength: number = 280): string {
@@ -449,9 +432,7 @@ export const useTwitterAnalysis = () => {
   const analyze = async (
     query: string, 
     options?: {
-      competitors?: string[],
-      industry?: string,
-      marketSegment?: string
+      industry?: string
     }
   ): Promise<AnalysisResult> => {
     setIsLoading(true);

@@ -1,4 +1,6 @@
-// Original interfaces remain the same
+import { supabase } from '@/lib/supabase'; 
+
+
 interface QuoraAnswer {
   content: string;
   author: {
@@ -46,6 +48,8 @@ interface AnalysisResult {
     analysis: AnalysisData;
     sources: QuoraAnswer[];
     timestamp: string;
+    filteredCount: number;
+    totalCount: number;
   };
   error?: string;
 }
@@ -75,10 +79,16 @@ interface AnalysisData {
   marketImplications: string;
 }
 
+// Function to get QuoraAnalysis model from Supabase
+export async function getQuoraAnalysisModel() { 
+  const { data } = await supabase.from('api_models').select('model_name').eq('api_name', 'QuoraAnalysis').single() 
+  return data?.model_name
+}
+
 export class QuoraAnalysisService {
   private static readonly TIMEOUT = 30000;
-  private static readonly RAPIDAPI_KEY = process.env.NEXT_PUBLIC_QRAPIDAPI_KEY;
-  private static readonly GROQ_API_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY;
+  private static readonly RAPIDAPI_KEY = process.env.NEXT_PUBLIC_QUORA_RAPID_API_KEY;
+  private static readonly GROQ_API_KEY = process.env.NEXT_PUBLIC_QUORA_GROQ_API_KEY;
 
   // Existing fetchWithTimeout method remains the same
   private static async fetchWithTimeout(
@@ -107,7 +117,7 @@ export class QuoraAnalysisService {
     }
   }
 
-  // Enhanced analysis method
+  // Enhanced analysis method with filtering
   public static async analyzeQuoraData(query: string): Promise<AnalysisResult> {
     try {
       if (!query.trim()) {
@@ -118,28 +128,46 @@ export class QuoraAnalysisService {
         return { success: false, error: 'API keys not configured' };
       }
 
-      const answers = await this.searchQuoraAnswers(query);
-      if (answers.length === 0) {
+      // Step 1: Fetch data from Quora API
+      const allAnswers = await this.searchQuoraAnswers(query);
+      const totalCount = allAnswers.length;
+
+      if (totalCount === 0) {
         return { success: false, error: 'No relevant Quora answers found' };
       }
 
-      const relevantContent = answers
+      // Step 2: Filter answers based on query relevance
+      const filteredAnswers = this.filterRelevantAnswers(allAnswers, query);
+      const filteredCount = filteredAnswers.length;
+
+      if (filteredCount === 0) {
+        return { 
+          success: false, 
+          error: `Found ${totalCount} answers but none contained relevant keywords from your query: "${query}"` 
+        };
+      }
+
+      // Step 3: Prepare content for analysis
+      const relevantContent = filteredAnswers
         .map((answer) => answer.content.trim())
         .filter(Boolean)
         .join('\n\n');
 
       if (!relevantContent) {
-        return { success: false, error: 'No valid content to analyze' };
+        return { success: false, error: 'No valid content to analyze after filtering' };
       }
 
+      // Step 4: Generate analysis using Groq
       const analysis = await this.generateAnalysis(query, relevantContent);
 
       return {
         success: true,
         data: {
           analysis: JSON.parse(analysis) as AnalysisData,
-          sources: answers,
+          sources: filteredAnswers,
           timestamp: new Date().toISOString(),
+          filteredCount,
+          totalCount,
         },
       };
 
@@ -150,9 +178,42 @@ export class QuoraAnalysisService {
     }
   }
 
-  // Existing searchQuoraAnswers and parseQuoraAnswer methods remain the same
+  // New method: Filter answers based on query relevance
+  private static filterRelevantAnswers(answers: QuoraAnswer[], query: string): QuoraAnswer[] {
+    // Extract meaningful words from query (remove common stop words)
+    const stopWords = new Set([
+      'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has', 
+      'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the', 'to', 'was', 
+      'will', 'with', 'how', 'what', 'when', 'where', 'why', 'who', 'which'
+    ]);
+
+    const queryWords = query
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ') // Remove punctuation
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !stopWords.has(word))
+      .map(word => word.trim());
+
+    if (queryWords.length === 0) {
+      // If no meaningful words found, return all answers
+      return answers;
+    }
+
+    return answers.filter(answer => {
+      const contentLower = answer.content.toLowerCase();
+      
+      // Check if content contains at least one query word
+      return queryWords.some(queryWord => {
+        // Use word boundaries to match whole words
+        const regex = new RegExp(`\\b${queryWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        return regex.test(contentLower);
+      });
+    });
+  }
+
+  // Existing searchQuoraAnswers method remains the same
   private static async searchQuoraAnswers(query: string): Promise<QuoraAnswer[]> {
-    const url = new URL('https://quora-scraper.p.rapidapi.com/search_answers');
+    const url = new URL('https://quora-scraper1.p.rapidapi.com/search_answers');
     url.searchParams.append('query', query);
     url.searchParams.append('language', 'en');
     url.searchParams.append('time', 'all_times');
@@ -192,6 +253,7 @@ export class QuoraAnalysisService {
     }
   }
 
+  // Existing parseQuoraAnswer method remains the same
   private static parseQuoraAnswer(item: QuoraAnswerRaw): QuoraAnswer {
     return {
       content: QuoraAnalysisService.sanitizeText(item.content || ''),
@@ -210,9 +272,22 @@ export class QuoraAnalysisService {
     };
   }
 
-  // Enhanced generateAnalysis method with structured prompt
+  // Enhanced generateAnalysis method with dynamic model fetching
   private static async generateAnalysis(query: string, content: string): Promise<string> {
     const url = 'https://api.groq.com/openai/v1/chat/completions';
+    
+    // Fetch model name from Supabase
+    let modelName: string;
+    try {
+      modelName = await getQuoraAnalysisModel();
+      if (!modelName) {
+        throw new Error('No model name found for QuoraAnalysis');
+      }
+    } catch (error) {
+      console.error('Failed to fetch model name from Supabase:', error);
+      // Fallback to default model if Supabase fetch fails
+      modelName = 'meta-llama/llama-4-maverick-17b-128e-instruct';
+    }
     
     const analysisPrompt = {
       role: 'system',
@@ -248,11 +323,11 @@ export class QuoraAnalysisService {
   "marketImplications": "Strategic insights for market positioning and product development"
 }
 
-Ensure the analysis is data-driven, uses professional marketing terminology, and provides actionable insights.`
+Ensure the analysis is data-driven, uses professional marketing terminology, and provides actionable insights. Focus only on the filtered, relevant content provided.`
     };
 
     const payload = {
-      model: 'deepseek-r1-distill-qwen-32b',
+      model: modelName,      
       messages: [
         analysisPrompt,
         {
@@ -260,8 +335,8 @@ Ensure the analysis is data-driven, uses professional marketing terminology, and
           content: content,
         },
       ],
-      temperature: 0.7,
-      max_tokens: 4500,
+      temperature: 0.4,
+      max_tokens: 5000,
       response_format: { type: 'json_object' },
     };
 

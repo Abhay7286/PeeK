@@ -1,14 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, memo } from 'react';
+import React, { useState, useEffect, memo, useRef } from 'react';
 import { QuoraAnalysisService } from '@/app/api/quoraAnalytics';
 import { 
   AlertCircle, Brain, Heart, 
-  TrendingUp, Target, Users 
+  TrendingUp, Target, Users, ChevronUp 
 } from 'lucide-react';
-import { Progress } from "@/app/components/ui/progress";
-import "@/app/styles/QuoraAnalytics.css"
-
+import "@/styles/QuoraAnalytics.css"
 
 // Types
 interface QuoraAnswer {
@@ -62,6 +60,51 @@ interface QuoraAnalyticsProps {
   className?: string;
 }
 
+// Skeleton Components
+const SkeletonCard = memo(() => (
+  <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 shadow-lg animate-pulse">
+    <div className="h-6 bg-gray-300/20 rounded mb-4 w-3/4"></div>
+    <div className="space-y-2 mb-4">
+      <div className="h-4 bg-gray-300/20 rounded w-full"></div>
+      <div className="h-4 bg-gray-300/20 rounded w-5/6"></div>
+      <div className="h-4 bg-gray-300/20 rounded w-4/6"></div>
+    </div>
+    <div className="h-2 bg-gray-300/20 rounded mb-2"></div>
+    <div className="h-3 bg-gray-300/20 rounded w-24"></div>
+  </div>
+));
+SkeletonCard.displayName = 'SkeletonCard';
+
+const SkeletonSourceCard = memo(() => (
+  <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 shadow-lg animate-pulse">
+    <div className="space-y-2 mb-6">
+      <div className="h-4 bg-gray-300/20 rounded w-full"></div>
+      <div className="h-4 bg-gray-300/20 rounded w-5/6"></div>
+      <div className="h-4 bg-gray-300/20 rounded w-4/6"></div>
+      <div className="h-4 bg-gray-300/20 rounded w-3/6"></div>
+    </div>
+    <div className="flex items-center justify-between mb-3">
+      <div className="h-4 bg-gray-300/20 rounded w-32"></div>
+      <div className="h-4 bg-gray-300/20 rounded w-16"></div>
+    </div>
+    <div className="h-3 bg-gray-300/20 rounded w-48 mb-3"></div>
+    <div className="h-4 bg-gray-300/20 rounded w-28"></div>
+  </div>
+));
+SkeletonSourceCard.displayName = 'SkeletonSourceCard';
+
+const SkeletonOverview = memo(() => (
+  <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 border-l-4 border-red-600 animate-pulse">
+    <div className="space-y-3">
+      <div className="h-4 bg-gray-300/20 rounded w-full"></div>
+      <div className="h-4 bg-gray-300/20 rounded w-5/6"></div>
+      <div className="h-4 bg-gray-300/20 rounded w-4/6"></div>
+      <div className="h-4 bg-gray-300/20 rounded w-3/6"></div>
+    </div>
+  </div>
+));
+SkeletonOverview.displayName = 'SkeletonOverview';
+
 // Helper Components
 const AnalysisCard = memo(({ 
   title, 
@@ -81,7 +124,12 @@ const AnalysisCard = memo(({
     <p className="mb-4">{content}</p>
     {metric !== undefined && (
       <div className="space-y-2">
-        <Progress value={metric * 10} className="h-2" />
+        <div className="w-full bg-gray-200/20 rounded-full h-2">
+          <div 
+            className="bg-red-600 h-2 rounded-full transition-all duration-500 ease-out" 
+            style={{ width: `${(metric * 10)}%` }}
+          ></div>
+        </div>
         <span className="text-sm">
           {metricLabel}: {metric}/10
         </span>
@@ -112,6 +160,14 @@ const SectionHeader = memo(({
 ));
 SectionHeader.displayName = 'SectionHeader';
 
+const UpvoteButton = memo(({ count }: { count: number }) => (
+  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100/10 rounded-lg border border-gray-200/20 hover:border-red-600/50 transition-colors duration-200">
+    <ChevronUp className="w-4 h-4 text-red-600" />
+    <span className="font-medium text-sm">{count.toLocaleString()}</span>
+  </div>
+));
+UpvoteButton.displayName = 'UpvoteButton';
+
 // Main Component
 const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, className = '' }) => {
   const [state, setState] = useState<{
@@ -122,10 +178,13 @@ const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, classNa
     loading: true
   });
 
+  const hasCalledAPI = useRef(false);
+
   useEffect(() => {
     const fetchAnalysis = async () => {
-      if (!query) return;
+      if (!query || hasCalledAPI.current) return;
 
+      hasCalledAPI.current = true;
       setState(prev => ({ ...prev, loading: true }));
 
       try {
@@ -155,8 +214,83 @@ const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, classNa
 
   if (state.loading) {
     return (
-      <div className="flex justify-center items-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white" />
+      <div className={`max-w-7xl mx-auto px-4 py-8 ${className}`}>
+        <header className="mb-8">
+          <div className="h-8 bg-gray-300/20 rounded w-80 mb-2 animate-pulse"></div>
+          <div className="h-6 bg-gray-300/20 rounded w-64 animate-pulse"></div>
+        </header>
+
+        <div className="space-y-8">
+          {/* Overview Skeleton */}
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-6 h-6 bg-gray-300/20 rounded animate-pulse"></div>
+              <div className="h-6 bg-gray-300/20 rounded w-32 animate-pulse"></div>
+            </div>
+            <SkeletonOverview />
+          </section>
+
+          {/* Pain Points Skeleton */}
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-6 h-6 bg-gray-300/20 rounded animate-pulse"></div>
+              <div className="h-6 bg-gray-300/20 rounded w-32 animate-pulse"></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[...Array(3)].map((_, i) => (
+                <SkeletonCard key={`pain-skeleton-${i}`} />
+              ))}
+            </div>
+          </section>
+
+          {/* User Experiences Skeleton */}
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-6 h-6 bg-gray-300/20 rounded animate-pulse"></div>
+              <div className="h-6 bg-gray-300/20 rounded w-40 animate-pulse"></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[...Array(3)].map((_, i) => (
+                <SkeletonCard key={`exp-skeleton-${i}`} />
+              ))}
+            </div>
+          </section>
+
+          {/* Emotional Triggers Skeleton */}
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-6 h-6 bg-gray-300/20 rounded animate-pulse"></div>
+              <div className="h-6 bg-gray-300/20 rounded w-44 animate-pulse"></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[...Array(3)].map((_, i) => (
+                <SkeletonCard key={`trigger-skeleton-${i}`} />
+              ))}
+            </div>
+          </section>
+
+          {/* Market Implications Skeleton */}
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-6 h-6 bg-gray-300/20 rounded animate-pulse"></div>
+              <div className="h-6 bg-gray-300/20 rounded w-48 animate-pulse"></div>
+            </div>
+            <SkeletonOverview />
+          </section>
+
+          {/* Source Answers Skeleton */}
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-6 h-6 bg-gray-300/20 rounded animate-pulse"></div>
+              <div className="h-6 bg-gray-300/20 rounded w-40 animate-pulse"></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[...Array(6)].map((_, i) => (
+                <SkeletonSourceCard key={`source-skeleton-${i}`} />
+              ))}
+            </div>
+          </section>
+        </div>
       </div>
     );
   }
@@ -178,7 +312,7 @@ const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, classNa
   return (
     <div className={`max-w-7xl mx-auto px-4 py-8 ${className}`}>
       <header className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Quora Discussion Analysis</h1>
+        <h1 className="text-3xl font-bold mb-2 text-red-600">Quora Discussion Analysis</h1>
         <p className="text-lg opacity-70">Analysis for: {query}</p>
       </header>
 
@@ -186,10 +320,10 @@ const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, classNa
         {/* Overview Section */}
         <section>
           <SectionHeader 
-            icon={<Target className="w-6 h-6" />} 
+            icon={<Target className="w-6 h-6 text-red-600" />} 
             title="Overview" 
           />
-          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6">
+          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 border-l-4 border-red-600">
             <div className="prose max-w-none">
               {data.analysis.overview}
             </div>
@@ -199,7 +333,7 @@ const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, classNa
         {/* Pain Points Grid */}
         <section>
           <SectionHeader 
-            icon={<AlertCircle className="w-6 h-6" />} 
+            icon={<AlertCircle className="w-6 h-6 text-red-600" />} 
             title="Pain Points" 
           />
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -219,10 +353,10 @@ const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, classNa
         {/* User Experiences */}
         <section>
           <SectionHeader 
-            icon={<Users className="w-6 h-6" />} 
+            icon={<Users className="w-6 h-6 text-red-600" />} 
             title="User Experiences" 
           />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.analysis.userExperiences.map((exp, index) => (
               <AnalysisCard
                 key={`exp-${index}`}
@@ -240,10 +374,10 @@ const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, classNa
         {/* Emotional Triggers */}
         <section>
           <SectionHeader 
-            icon={<Heart className="w-6 h-6" />} 
+            icon={<Heart className="w-6 h-6 text-red-600" />} 
             title="Emotional Triggers" 
           />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.analysis.emotionalTriggers.map((trigger, index) => (
               <AnalysisCard
                 key={`trigger-${index}`}
@@ -260,10 +394,10 @@ const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, classNa
         {/* Market Implications */}
         <section>
           <SectionHeader 
-            icon={<Brain className="w-6 h-6" />} 
+            icon={<Brain className="w-6 h-6 text-red-600" />} 
             title="Market Implications" 
           />
-          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6">
+          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-6 border-l-4 border-red-600">
             <div className="prose max-w-none">
               {data.analysis.marketImplications}
             </div>
@@ -273,31 +407,48 @@ const QuoraAnalyticsDashboard: React.FC<QuoraAnalyticsProps> = ({ query, classNa
         {/* Source Answers */}
         <section>
           <SectionHeader 
-            icon={<TrendingUp className="w-6 h-6" />} 
+            icon={<TrendingUp className="w-6 h-6 text-red-600" />} 
             title="Source Answers" 
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.sources.map((answer, index) => (
-              <div key={`answer-${index}`} className="bg-white/10 backdrop-blur-lg rounded-lg p-6">
-                <div className="mb-4">{answer.content}</div>
-                <div className="flex justify-between items-center text-sm">
-                  <a 
-                    href={answer.author.profile_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-400 hover:text-blue-300"
-                  >
-                    {answer.author.name}
-                  </a>
-                  <div className="flex items-center gap-4">
-                    <span>👍 {answer.upvotes}</span>
+              <div key={`answer-${index}`} className="bg-white/10 backdrop-blur-lg rounded-lg p-6 shadow-lg hover:shadow-xl transition-all duration-300 border border-gray-200/20 hover:border-red-600/50">
+                <div className="mb-6 text-gray-800 dark:text-gray-200 leading-relaxed">
+                  {answer.content.length > 200 
+                    ? `${answer.content.substring(0, 200)}...` 
+                    : answer.content
+                  }
+                </div>
+                
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <a 
+                      href={answer.author.profile_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-red-600 hover:text-red-700 font-medium transition-colors duration-200 flex items-center gap-2"
+                    >
+                      <span className="w-2 h-2 bg-red-600 rounded-full"></span>
+                      {answer.author.name}
+                    </a>
+                    <UpvoteButton count={answer.upvotes} />
+                  </div>
+                  
+                  {answer.author.credentials && (
+                    <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+                      {answer.author.credentials}
+                    </p>
+                  )}
+                  
+                  <div className="pt-3 border-t border-gray-200/20">
                     <a 
                       href={answer.post_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300"
+                      className="inline-flex items-center gap-2 text-red-600 hover:text-red-700 text-sm font-medium transition-colors duration-200"
                     >
-                      View on Quora →
+                      <span>View on Quora</span>
+                      <TrendingUp className="w-4 h-4" />
                     </a>
                   </div>
                 </div>

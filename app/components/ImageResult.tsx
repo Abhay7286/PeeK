@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import Image from "next/image";
-import "@/app/styles/images.css";
+import "@/styles/images.css";
 import { searchImages } from "@/app/api/imageSearchApi";
 
 interface ImageResult {

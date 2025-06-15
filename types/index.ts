@@ -150,3 +150,15 @@ export interface ResultsSectionProps {
   submittedQuery: string;
   activeComponents: string[];
 }
+
+export interface SpecializedQueries {
+  [key: string]: string;
+}
+
+export interface QueryProps {
+  query: string;
+}
+
+export interface KeywordProps {
+  keyword: string;
+}
